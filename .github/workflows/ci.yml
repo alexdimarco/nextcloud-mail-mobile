@@ -1,9 +1,10 @@
 # SPDX-FileCopyrightText: 2026 Alex DiMarco
 # SPDX-License-Identifier: AGPL-3.0-only
 #
-# Checks on every push and pull request. Runs on GitHub's own runners,
+# Checks on every push to main and on every pull request; the release
+# workflow runs them too, before it builds. Runs on GitHub's own runners,
 # which are free for public repositories. Every action is pinned to a
-# commit, with its version in a comment.
+# commit, with its version in a comment (Dependabot keeps them current).
 
 name: CI
 
@@ -11,18 +12,22 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_call:
 
 permissions:
   contents: read
 
+# A newer push to the same pull request replaces the older run; runs on
+# main and on tags always finish
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   php-lint:
     name: PHP style and static analysis
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -45,6 +50,7 @@ jobs:
   phpunit:
     name: PHPUnit (PHP ${{ matrix.php }})
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
@@ -67,6 +73,7 @@ jobs:
   node:
     name: Front end (lint, tests, build)
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -83,6 +90,7 @@ jobs:
   licences:
     name: Licence headers (REUSE)
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -92,20 +100,25 @@ jobs:
   secrets:
     name: Secret scan (gitleaks)
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
       - name: Scan the whole history
+        # Git refuses to read a repository owned by another user unless
+        # told it is safe; inside the container it is owned by the runner
         run: >
           docker run --rm -v "$PWD:/repo" -w /repo
+          -e GIT_CONFIG_COUNT=1 -e GIT_CONFIG_KEY_0=safe.directory -e GIT_CONFIG_VALUE_0=/repo
           ghcr.io/gitleaks/gitleaks@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f
           git --redact --verbose /repo
 
   package:
     name: Build the app
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -134,6 +147,7 @@ jobs:
     name: Nextcloud ${{ matrix.nextcloud }} with Mail ${{ matrix.mail }}
     needs: package
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:

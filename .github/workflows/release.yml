@@ -1,8 +1,8 @@
 # SPDX-FileCopyrightText: 2026 Alex DiMarco
 # SPDX-License-Identifier: AGPL-3.0-only
 #
-# On a version tag (for example v0.1.0): build the app and attach the
-# tarball to a GitHub release. The tarball is not signed; signing for the
+# On a version tag (for example v0.1.0): run every check, then build the
+# app and attach the tarball to a GitHub release. The tarball is not signed; signing for the
 # Nextcloud app store needs the app's private key, which never goes into
 # this repository or its CI.
 
@@ -16,8 +16,14 @@ permissions:
   contents: read
 
 jobs:
+  # Every check from ci.yml must pass before anything is built
+  checks:
+    uses: ./.github/workflows/ci.yml
+
   release:
+    needs: checks
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
     permissions:
       contents: write
     steps:
@@ -37,6 +43,13 @@ jobs:
         run: |
           version="$(sed -n 's:.*<version>\(.*\)</version>.*:\1:p' appinfo/info.xml | head -n 1)"
           test "v$version" = "$GITHUB_REF_NAME"
+      - name: Check the source code address is filled in
+        # The AGPL licence asks for a working link to the source
+        run: |
+          if grep -q 'github.com/OWNER/' appinfo/info.xml; then
+            echo "Replace OWNER in appinfo/info.xml with the real repository address first" >&2
+            exit 1
+          fi
       - run: composer install --no-interaction --no-progress
       - run: composer scope
       - run: npm ci

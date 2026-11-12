@@ -11,6 +11,9 @@ with optional notifications when new mail arrives.
 Mail Mobile is a separate Nextcloud app that sits **beside** the official
 Mail app. It does not change Mail, so Mail can update on its own schedule.
 
+Mail Mobile is an independent project. It is not made by, endorsed by or
+connected to Nextcloud GmbH; "Nextcloud" is their trademark.
+
 What you can do on the phone page:
 
 - read your inboxes and folders, with conversations grouped if you like
@@ -27,20 +30,37 @@ What you can do on the phone page:
 | Mail app | 5.13 or newer, older than 7 |
 | PHP | 8.2 to 8.5 (whatever your Nextcloud version runs on) |
 | Your server address | must use `https://` (phones only allow home-screen apps and notifications on secure sites) |
-| Background jobs | Nextcloud's background jobs set to **Cron**, for notifications |
+| Background jobs | Nextcloud's background jobs set to **Cron**, for notifications (see below) |
 
 Mail 7 and newer are refused on purpose until they have been tested. The page
 then says so in plain words instead of breaking.
+
+**Words used below:**
+
+- **occ** is Nextcloud's command-line tool. You run it on the server, from
+  the Nextcloud folder, as the user the web server runs as.
+- **www-data** is that user on Debian and Ubuntu. On other systems it may be
+  `apache`, `nginx` or `http`.
+- **custom_apps** is the folder inside your Nextcloud where apps you add
+  yourself go. Some servers use the `apps` folder instead.
+- **Cron** is a setting under **Administration settings → Basic settings →
+  Background jobs**. It makes the server run Nextcloud's background work every
+  5 minutes, which notifications rely on.
 
 ## Install
 
 ### From a release
 
-1. Download `mail_mobile-<version>.tar.gz` from the releases page.
-2. Unpack it into your Nextcloud's `custom_apps` folder (or `apps`), so you
-   get a folder named `mail_mobile`.
+1. Download `mail_mobile-<version>.tar.gz` from the
+   [releases page](../../releases).
+2. Unpack it into your Nextcloud's `custom_apps` folder, so you get a folder
+   named `mail_mobile`.
 3. Turn it on: `sudo -u www-data php occ app:enable mail_mobile`
    (or in Nextcloud: **Apps → Your apps → Mail Mobile → Enable**).
+4. As an admin, open **Administration settings → Additional settings → Mail
+   Mobile notifications** and enter a contact address such as
+   `mailto:you@example.com`. Push services (Google, Apple and others) ask for
+   one, and some refuse notifications without it.
 
 ### From this repository
 
@@ -71,8 +91,8 @@ Mail Mobile**, and in the Nextcloud app menu.
 **iPhone and iPad (Safari, iOS 16.4 or newer for notifications)**
 
 1. In Safari, tap the Share button, then **Add to Home Screen**.
-2. Open Mail from the new home-screen icon. Notifications only work from
-   the home-screen icon, not from inside Safari.
+2. Open **Mail Mobile** from the new home-screen icon. Notifications only
+   work from the home-screen icon, not from inside Safari.
 3. Open the mailbox list (☰), tap **Enable notifications** and allow them.
 4. Tap **Send test notification** to check it works.
 
@@ -101,10 +121,18 @@ How they work, step by step:
 2. Mail checks for new mail in the background (or when you refresh).
    When it stores new mail in an **inbox**, Mail Mobile queues a small
    background job holding only numbers: who, which mailbox, which messages.
-3. On the next cron run, the job reads the sender and subject through Mail,
-   encrypts them for your phone, and hands them to your browser's push
-   service (Google, Mozilla, Apple or Microsoft). Up to 3 new messages get
-   one notification each; more than 3 get one summary.
+3. On the next cron run, the job builds the notification, encrypts it for
+   your phone, and hands it to your browser's push service (Google, Mozilla,
+   Apple or Microsoft).
+
+**What a notification shows.** By default only "New mail" and how many
+messages, because phones show notifications on the lock screen, where anyone
+holding the phone can read them. You can choose to show the sender and
+subject instead, on the phone page (mailbox list ☰) or under **Personal
+settings → Mail Mobile**. The sender is then shown with their real address,
+for example `IT Support <someone@example.com>`, because anyone can put any
+name on an email. Up to 3 new messages get one notification each; more than
+3 get one summary.
 
 **They are not instant.** A notification arrives after Mail's next background
 check plus the next cron run. Mail checks every 15 minutes for people who
@@ -115,8 +143,11 @@ hours after three days without use. An admin can set a fixed interval
 part of this version.
 
 **Server keys.** Web push needs a key pair for the server (called VAPID
-keys). They are made when the app is installed. The private key is stored
-encrypted with your Nextcloud's secret. If it may have leaked, make new keys:
+keys). They are made when the app is installed, and never again on their
+own. The private key is stored encrypted with your Nextcloud's secret. If it
+cannot be read (for example after the secret changed), notifications stop
+and the admin settings page says so. If the key may have leaked, or cannot
+be read, make new keys:
 
 ```sh
 sudo -u www-data php occ mail_mobile:vapid:reset
@@ -128,13 +159,22 @@ again on their phones.
 ## Privacy
 
 - **What is stored:** for each phone or browser with notifications on: your
-  user name, its push address, its two public keys, and when it was added.
-  They are removed when you turn notifications off, when the push service says
-  the address is gone, or when your Nextcloud account is deleted.
+  user name, its push address and its two encryption keys (one public, one
+  secret that only your browser and the server know), a short device name
+  such as "Chrome on Android", which sign-in turned it on, and when.
+- **When it is removed:** when you turn notifications off; when you sign out
+  on that device; when you remove the device under **Personal settings →
+  Security** or under **Personal settings → Mail Mobile**; when you change
+  your password (all devices); when the push service says the address is
+  gone; and when your Nextcloud account is deleted. If someone else signs in
+  on the same browser, the phone page turns your notifications off there.
 - **What leaves your server:** only the notifications themselves, sent to the
-  push service of your phone's browser. Their content (sender and subject) is
-  encrypted for your phone; the push service cannot read it. It can see that
-  a notification was sent and when.
+  push service of your phone's browser. Their content is encrypted for your
+  phone; the push service cannot read it. It can see that a notification was
+  sent and when, your server's internet address, and the contact address the
+  admin entered.
+- **What your lock screen shows:** "New mail" unless you chose to show the
+  sender and subject (see Notifications above).
 - **Where the server may send:** only to the known push services listed in
   [`lib/Service/EndpointPolicy.php`](lib/Service/EndpointPolicy.php), over
   https. Any other address is refused, so the server cannot be made to send
@@ -142,23 +182,6 @@ again on their phones.
 - **What waits in the background-job table:** only numbers (user, mailbox and
   message ids). Sender names and subjects are read when the job runs.
 - Nothing else is collected, and the app sends nothing anywhere else.
-
-## Moving from a modified Mail app
-
-If you ran a modified copy of Mail that had this phone page built in, the
-official Mail app plus Mail Mobile replaces it:
-
-1. Install the official Mail app (5.13 or newer) and Mail Mobile.
-2. Remove what the modified copy left behind (the `oc_` prefix may differ on your server):
-
-   ```sh
-   sudo -u www-data php occ config:app:delete mail mobile_push_vapid_public
-   sudo -u www-data php occ config:app:delete mail mobile_push_vapid_private
-   ```
-
-   and in the database: `DROP TABLE oc_mail_mob_push_subs;`
-3. On each phone, delete the old home-screen icon, open `/apps/mail_mobile/`,
-   save it to the home screen again and turn notifications on again.
 
 ## For developers
 
@@ -183,9 +206,10 @@ digest), installs Mail from its release (pinned by checksum) and the built app,
 and checks the page, the manifest, the service worker, the push key, the
 allowlist, and the "needs Mail" message.
 
-GitHub runs all of this on every push (see `.github/workflows/ci.yml`),
-including the integration test on Nextcloud 33, 34 and 35. A version tag
-(`v0.1.0`) builds the release tarball (`.github/workflows/release.yml`).
+GitHub runs all of this on every push to `main` and on every pull request
+(see `.github/workflows/ci.yml`), including the integration test on
+Nextcloud 33, 34 and 35. A version tag (`v0.1.0`) runs the same checks and,
+if they pass, builds the release tarball (`.github/workflows/release.yml`).
 
 ### Layout
 
@@ -206,10 +230,23 @@ including the integration test on Nextcloud 33, 34 and 35. A version tag
 
 - instant notifications (watching the mailbox live with IMAP IDLE)
 - reading mail offline
-- encrypted mail (S/MIME, PGP) in the composer
+- signed or encrypted mail (S/MIME, PGP) in the composer. If your sender
+  address has an S/MIME certificate, the composer says so and only sends
+  unsigned after you tick a box; use the full Mail app for signed mail.
 - Mail 6 is supported in the code but not yet tested: it has no release yet
 
 ## Licence
 
-AGPL-3.0-only, the same as Nextcloud Mail. See [LICENSE](LICENSE). The app
-icons are based on Google's Material icons (Apache-2.0); see `REUSE.toml`.
+GNU Affero General Public License, version 3 (AGPL-3.0). See [LICENSE](LICENSE).
+
+- Files that started in Nextcloud Mail, or were adapted from it, keep
+  Nextcloud's copyright line and say "AGPL-3.0-or-later" (version 3 or any
+  later version), as Mail's own files do.
+- Files written new for this app say "AGPL-3.0-only".
+- Each file's first lines say which applies; the licence texts are in
+  `LICENSES/`. The app icons are based on Google's Material icons
+  (Apache-2.0); see `REUSE.toml`.
+
+Because of the AGPL, if you run a changed copy for other people, you must
+offer them its source code. The phone page and the settings page link to
+the source.

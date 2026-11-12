@@ -28,7 +28,7 @@ fi
 out="build/mail_mobile"
 rm -rf build
 mkdir -p "$out"
-cp -R appinfo img js lib templates vendor-scoped LICENSE README.md CHANGELOG.md "$out/"
+cp -R appinfo img js lib templates vendor-scoped LICENSE LICENSES README.md CHANGELOG.md "$out/"
 if [ -d l10n ]; then
 	cp -R l10n "$out/"
 fi
