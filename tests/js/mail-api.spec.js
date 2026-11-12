@@ -10,6 +10,7 @@ import {
 	isMailLoginError,
 	looksLikeConversation,
 	sendMessage,
+	syncMailbox,
 } from '../../src/api/mail.js'
 
 const axiosMock = vi.hoisted(() => ({
@@ -79,6 +80,9 @@ describe('conversation hint', () => {
 describe('calls to Mail', () => {
 	beforeEach(() => {
 		vi.clearAllMocks()
+		// Also drop queued one-off answers, so one failing test cannot
+		// leave answers behind for the next
+		Object.values(axiosMock).forEach((mock) => mock.mockReset())
 		storeMock.authError = null
 	})
 
@@ -86,6 +90,21 @@ describe('calls to Mail', () => {
 		axiosMock.get.mockResolvedValueOnce({ data: { id: 1, mailboxes: [{ databaseId: 2 }] } })
 		await expect(fetchMailboxes(1)).resolves.toEqual([{ databaseId: 2 }])
 		expect(axiosMock.get).toHaveBeenCalledWith('/index.php/apps/mail/api/mailboxes', { params: { accountId: 1 } })
+	})
+
+	it('runs a full first sync when Mail says the mailbox is not cached yet (428)', async () => {
+		// Mail 5.13 answers 428 for a mailbox it has never synced (a new account)
+		axiosMock.post.mockRejectedValueOnce(httpError(428)).mockResolvedValueOnce({ data: {} })
+		await expect(syncMailbox(7)).resolves.toBeUndefined()
+		expect(axiosMock.post).toHaveBeenCalledTimes(2)
+		expect(axiosMock.post.mock.calls[0][1].init).toBe(false)
+		expect(axiosMock.post.mock.calls[1]).toEqual(['/index.php/apps/mail/api/mailboxes/7/sync', expect.objectContaining({ init: true })])
+	})
+
+	it('reports a failed first sync like any other error', async () => {
+		axiosMock.post.mockRejectedValueOnce(httpError(428)).mockRejectedValueOnce(httpError(424, { data: { reason: 'AUTHENTICATION_FAILED' } }))
+		await expect(syncMailbox(7)).rejects.toThrow()
+		expect(storeMock.authError).toBe('AUTHENTICATION_FAILED')
 	})
 
 	it('uses Mail\'s general address search for suggestions', async () => {

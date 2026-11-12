@@ -131,9 +131,16 @@ export async function syncMailbox(mailboxId) {
 		await axios.post(url, body)
 	} catch (error) {
 		// The mailbox has no cache yet (new account or cleared cache): a
-		// full first sync is needed before quick syncs work
-		if (error.response && error.response.status === 412) {
-			await axios.post(url, { ...body, init: true })
+		// full first sync is needed before quick syncs work. Mail answers
+		// 428 (Precondition Required) for this; 412 is accepted too in case
+		// a Mail version uses the neighbouring code.
+		const status = error.response?.status
+		if (status === 428 || status === 412) {
+			try {
+				await axios.post(url, { ...body, init: true })
+			} catch (initError) {
+				handleError(initError)
+			}
 			return
 		}
 		handleError(error)
