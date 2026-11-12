@@ -9,6 +9,9 @@ import {
 	fetchMailboxes,
 	isMailLoginError,
 	looksLikeConversation,
+	page,
+	REAUTH_ATTEMPT_KEY,
+	reauthenticate,
 	sendMessage,
 	syncMailbox,
 } from '../../src/api/mail.js'
@@ -162,5 +165,50 @@ describe('sending', () => {
 			.mockRejectedValueOnce(httpError(400))
 		await expect(sendMessage(MESSAGE)).rejects.toThrow()
 		expect(axiosMock.post).toHaveBeenCalledTimes(2)
+	})
+})
+
+describe('signing in again after the session ran out', () => {
+	let reload
+
+	beforeEach(() => {
+		window.localStorage.clear()
+		storeMock.sessionExpired = false
+		reload = vi.fn()
+		page.reload = reload
+	})
+
+	it('reloads once to sign in again', () => {
+		reauthenticate(1_000_000)
+
+		expect(reload).toHaveBeenCalledTimes(1)
+		expect(window.localStorage.getItem(REAUTH_ATTEMPT_KEY)).toBe('1000000')
+		expect(storeMock.sessionExpired).toBe(false)
+	})
+
+	it('shows a button instead of reloading again within two minutes', () => {
+		reauthenticate(1_000_000)
+		reauthenticate(1_000_000 + 60_000)
+
+		expect(reload).toHaveBeenCalledTimes(1)
+		expect(storeMock.sessionExpired).toBe(true)
+	})
+
+	it('reloads again once two minutes have passed', () => {
+		reauthenticate(1_000_000)
+		reauthenticate(1_000_000 + 3 * 60_000)
+
+		expect(reload).toHaveBeenCalledTimes(2)
+	})
+
+	it('does not reload forever when a proxy answers with an HTML page', async () => {
+		axiosMock.get.mockResolvedValue({ status: 200, data: '<!DOCTYPE html><HTML><body>Gateway error</body></HTML>' })
+		const { fetchAccounts } = await import('../../src/api/mail.js')
+
+		await expect(fetchAccounts()).rejects.toBeTruthy()
+		await expect(fetchAccounts()).rejects.toBeTruthy()
+
+		expect(reload).toHaveBeenCalledTimes(1)
+		expect(storeMock.sessionExpired).toBe(true)
 	})
 })

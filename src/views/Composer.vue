@@ -162,6 +162,16 @@
 			</span>
 		</div>
 
+		<div v-if="needsSmime" class="composer__notice composer__smime">
+			<p>
+				{{ t('mail_mobile', 'This address has an S/MIME certificate, but Mail Mobile cannot sign or encrypt mail. To send it signed or encrypted, use the full Mail app.') }}
+			</p>
+			<label>
+				<input v-model="unsignedOk" type="checkbox">
+				{{ t('mail_mobile', 'Send without signing or encryption') }}
+			</label>
+		</div>
+
 		<div v-if="notice" class="composer__notice">
 			{{ notice }}
 		</div>
@@ -220,6 +230,7 @@ function buildIdentities(accounts) {
 			email: account.emailAddress,
 			name: account.name,
 			signature: account.signature,
+			smimeCertificateId: account.smimeCertificateId ?? null,
 		},
 		...(account.aliases ?? []).map((alias) => ({
 			key: 'l' + alias.id,
@@ -228,6 +239,7 @@ function buildIdentities(accounts) {
 			email: alias.alias,
 			name: alias.name,
 			signature: alias.signature ?? account.signature,
+			smimeCertificateId: alias.smimeCertificateId ?? null,
 		})),
 	])
 }
@@ -243,11 +255,12 @@ function signatureToText(html) {
 	if (!html) {
 		return ''
 	}
-	const container = document.createElement('div')
-	container.innerHTML = String(html)
+	// DOMParser builds an inert document: unlike innerHTML on an element
+	// of this page, nothing in it loads (images) or runs
+	const doc = new DOMParser().parseFromString(String(html)
 		.replace(/<br\s*\/?>/gi, '\n')
-		.replace(/<\/(p|div)>/gi, '\n')
-	return (container.textContent ?? '').replace(/\n{3,}/g, '\n\n').trim()
+		.replace(/<\/(p|div)>/gi, '\n'), 'text/html')
+	return (doc.body.textContent ?? '').replace(/\n{3,}/g, '\n\n').trim()
 }
 
 export default {
@@ -281,6 +294,9 @@ export default {
 			// uploads are added with an id by onFiles()
 			attachments: (prefill.attachments ?? []).map((attachment) => ({ ...attachment, uploading: false })),
 			sending: false,
+			// The sender has an S/MIME certificate and the person agreed to
+			// send this message unsigned anyway
+			unsignedOk: false,
 			notice: null,
 			suggestions: [],
 			suggestField: 'to',
@@ -324,6 +340,12 @@ export default {
 			// Default to html when unset, like a fresh desktop install.
 			const account = store.accounts.find((candidate) => candidate.id === this.selectedIdentity?.accountId)
 			return account?.editorMode !== 'plaintext'
+		},
+
+		// Mail Mobile cannot sign or encrypt (S/MIME), so it never does that
+		// silently: the person has to agree to send unsigned first
+		needsSmime() {
+			return !!this.selectedIdentity?.smimeCertificateId
 		},
 
 		uploading() {
@@ -512,6 +534,10 @@ export default {
 			const to = this.parseRecipients(this.to)
 			if (to.length === 0) {
 				this.notice = this.t('mail_mobile', 'Please enter at least one valid recipient address')
+				return
+			}
+			if (this.needsSmime && !this.unsignedOk) {
+				this.notice = this.t('mail_mobile', 'Tick "Send without signing or encryption" to send this from your phone, or use the full Mail app.')
 				return
 			}
 			this.sending = true
@@ -810,6 +836,12 @@ export default {
 	background-color: var(--mob-hover);
 	color: var(--mob-danger);
 	font-size: 14px;
+}
+.composer__smime {
+	color: var(--mob-text);
+}
+.composer__smime p {
+	margin: 0 0 8px;
 }
 .composer__actions {
 	display: flex;

@@ -37,16 +37,20 @@
 				</a>
 			</div>
 
+			<!-- Sandboxed with no allow-scripts: even if Mail's cleaning or its
+			     security header ever let a script through, it cannot run here.
+			     allow-same-origin only lets resizeFrame() measure the page;
+			     never add allow-scripts next to it. -->
 			<iframe
 				v-if="message.hasHtmlBody"
 				ref="frame"
 				class="reader__frame"
 				:src="frameUrl"
+				sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox"
 				:title="t('mail_mobile', 'Message body')"
 				@load="resizeFrame" />
-			<!-- body of plain-text mail is escaped and linkified by Mail on the server (UrlLinker), the same HTML Mail's desktop app shows with v-html -->
-			<!-- eslint-disable-next-line vue/no-v-html -->
-			<div v-else class="reader__plain" v-html="message.body" />
+			<!-- Plain-text mail: shown as text, never as HTML; links are found here -->
+			<PlainText v-else class="reader__plain" :parts="plainParts" />
 
 			<div class="reader__actions">
 				<button class="reader__action reader__action--primary" @click="reply">
@@ -77,6 +81,55 @@ import { deleteMessage, fetchMessage, htmlBodyUrl, setFlags } from '../api/mail.
 import logger from '../logger.js'
 import { accountFor, findMailbox, store } from '../store.js'
 
+// Web addresses and email addresses in plain text. Trailing punctuation
+// is left out of the link, as in "see https://example.com."
+const LINK_PATTERN = /(\bhttps?:\/\/[^\s<>"']+|\bmailto:[^\s<>"']+|[\w.%+-]+@[a-z0-9.-]+\.[a-z]{2,})/gi
+const TRAILING_PUNCTUATION = /[.,;:!?)\]}'"]+$/
+
+/**
+ * The text of a plain-text message, from the HTML Mail sends for it.
+ * DOMParser builds an inert document: nothing in it loads or runs.
+ *
+ * @param {string} html Mail's escaped and linkified body
+ * @return {string} the plain text
+ */
+export function htmlToText(html) {
+	const doc = new DOMParser().parseFromString(String(html ?? ''), 'text/html')
+	return doc.body.textContent ?? ''
+}
+
+/**
+ * Split plain text into text and link parts, for rendering as text nodes
+ * and <a> elements (never as HTML).
+ *
+ * @param {string} text the plain text
+ * @return {Array<{text: string, href?: string}>} the parts in order
+ */
+export function linkify(text) {
+	const parts = []
+	let last = 0
+	for (const match of text.matchAll(LINK_PATTERN)) {
+		let found = match[0]
+		const trailing = found.match(TRAILING_PUNCTUATION)
+		if (trailing) {
+			found = found.slice(0, -trailing[0].length)
+		}
+		if (found === '') {
+			continue
+		}
+		if (match.index > last) {
+			parts.push({ text: text.slice(last, match.index) })
+		}
+		const href = /^(https?|mailto):/i.test(found) ? found : 'mailto:' + found
+		parts.push({ text: found, href })
+		last = match.index + found.length
+	}
+	if (last < text.length) {
+		parts.push({ text: text.slice(last) })
+	}
+	return parts
+}
+
 /**
  * Escape text that goes into the forward header markup
  *
@@ -91,8 +144,28 @@ function escapeHtml(text) {
 		.replace(/"/g, '&quot;')
 }
 
+// Text nodes and links built by Vue's render function: the text is never
+// parsed as HTML, so nothing in a message can add elements to the page
+const PlainText = {
+	name: 'PlainText',
+	functional: true,
+	props: {
+		parts: {
+			type: Array,
+			required: true,
+		},
+	},
+
+	render(h, { props, data }) {
+		return h('div', data, props.parts.map((part) => (part.href
+			? h('a', { attrs: { href: part.href, target: '_blank', rel: 'noopener noreferrer' } }, part.text)
+			: part.text)))
+	},
+}
+
 export default {
 	name: 'Reader',
+	components: { PlainText },
 	props: {
 		messageId: {
 			type: Number,
@@ -112,6 +185,10 @@ export default {
 	computed: {
 		frameUrl() {
 			return htmlBodyUrl(this.messageId)
+		},
+
+		plainParts() {
+			return linkify(htmlToText(this.message.body))
 		},
 
 		senderLabel() {
@@ -287,11 +364,13 @@ export default {
 				accountId: message.accountId,
 				to: [],
 				subject: /^fwd?:/i.test(subject) ? subject : `Fwd: ${subject}`,
-				// The body is already sanitized server-side (HTML mail) or
-				// escaped and linkified (plain-text mail). Inline images in it
-				// carry data-cid, which the MIME builder turns back into a
-				// cid: reference once the parts are attached.
-				forwardedHtml: this.forwardHeaderHtml() + (message.body ?? ''),
+				// HTML mail comes sanitized by Mail; its inline images carry
+				// data-cid, which the MIME builder turns back into a cid:
+				// reference once the parts are attached. Plain-text mail is
+				// escaped here, not trusted from Mail's markup.
+				forwardedHtml: this.forwardHeaderHtml() + (message.hasHtmlBody
+					? (message.body ?? '')
+					: escapeHtml(htmlToText(message.body)).replace(/\r?\n/g, '<br>')),
 				forwardedFrom: sender?.label || sender?.email || '',
 				// Attachments live on the original message on the server; the
 				// backend copies them when it sees a message-attachment ref

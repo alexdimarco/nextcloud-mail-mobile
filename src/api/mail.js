@@ -15,20 +15,74 @@ import logger from '../logger.js'
 import { store } from '../store.js'
 
 export const REAUTH_KEY = 'mail_mobile-reauth'
+// When this page last reloaded itself to sign in again. Not cleared when
+// a call succeeds: one call working while another keeps failing would
+// otherwise still reload forever. Only the "Sign in again" button clears it.
+export const REAUTH_ATTEMPT_KEY = 'mail_mobile-reauth-attempt'
+export const REAUTH_BRAKE_MS = 2 * 60 * 1000
+
+// Page reload, kept replaceable for the tests (jsdom cannot reload)
+export const page = {
+	reload: () => window.location.reload(),
+}
+
+/**
+ * @param {string} key the storage key
+ * @return {string|null} the stored value, null if unavailable
+ */
+function readStorage(key) {
+	try {
+		return window.localStorage.getItem(key)
+	} catch {
+		return null
+	}
+}
+
+/**
+ * @param {string} key the storage key
+ * @param {string|null} value the value, or null to remove it
+ */
+function writeStorage(key, value) {
+	try {
+		if (value === null) {
+			window.localStorage.removeItem(key)
+		} else {
+			window.localStorage.setItem(key, value)
+		}
+	} catch {
+		// localStorage unavailable: best effort only
+	}
+}
 
 /**
  * Trigger a new sign-in. Single sign-on (for example OpenID Connect)
  * often loses the page address on the round trip and lands on the full
  * Mail app instead of here. Leave a short-lived marker so the small script
  * this app adds to Mail's page can send the person back.
+ *
+ * If the page already reloaded for this less than two minutes ago, it does
+ * not reload again: a proxy error page or a sign-in loop would otherwise
+ * reload the phone page forever. It shows a "Sign in again" button instead.
+ *
+ * @param {number} now the current time in milliseconds
  */
-function reauthenticate() {
-	try {
-		window.localStorage.setItem(REAUTH_KEY, String(Date.now()))
-	} catch {
-		// localStorage unavailable: best effort only
+export function reauthenticate(now = Date.now()) {
+	const last = Number(readStorage(REAUTH_ATTEMPT_KEY))
+	if (last && now - last >= 0 && now - last < REAUTH_BRAKE_MS) {
+		store.sessionExpired = true
+		return
 	}
-	window.location.reload()
+	writeStorage(REAUTH_ATTEMPT_KEY, String(now))
+	writeStorage(REAUTH_KEY, String(now))
+	page.reload()
+}
+
+/**
+ * The "Sign in again" button: the person asked for it, so no brake.
+ */
+export function signInAgain() {
+	writeStorage(REAUTH_ATTEMPT_KEY, null)
+	reauthenticate()
 }
 
 /**
@@ -75,7 +129,7 @@ function handleError(error) {
 		reauthenticate()
 		throw error
 	}
-	if (response && typeof response.data === 'string' && response.data.includes('<html')) {
+	if (response && typeof response.data === 'string' && /<html/i.test(response.data)) {
 		reauthenticate()
 		throw error
 	}
@@ -92,12 +146,17 @@ function handleError(error) {
  * @return {Promise<Array>} accounts as Mail describes them
  */
 export async function fetchAccounts() {
+	let resp
 	try {
-		const resp = await axios.get(generateUrl('/apps/mail/api/accounts'))
-		return Array.isArray(resp.data) ? resp.data : []
+		resp = await axios.get(generateUrl('/apps/mail/api/accounts'))
 	} catch (error) {
 		handleError(error)
 	}
+	if (!Array.isArray(resp.data)) {
+		// For example a proxy's or sign-in page's HTML instead of Mail's answer
+		handleError({ response: resp })
+	}
+	return resp.data
 }
 
 /**

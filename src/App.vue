@@ -46,6 +46,13 @@
 			{{ t('mail_mobile', 'An updated version is available — tap to reload') }}
 		</button>
 
+		<div v-if="store.sessionExpired" class="mob__banner" role="alert">
+			{{ t('mail_mobile', 'Your Nextcloud session has ended, or the server answered with an error page.') }}
+			<button class="mob__retry" @click="signInAgain">
+				{{ t('mail_mobile', 'Sign in again') }}
+			</button>
+		</div>
+
 		<div v-if="store.authError" class="mob__banner" role="alert">
 			<template v-if="store.authError === 'RATE_LIMITED'">
 				{{ t('mail_mobile', 'The mail server is temporarily not accepting sign-ins. Retrying automatically…') }}
@@ -126,6 +133,7 @@ import Composer from './views/Composer.vue'
 import EnvelopeList from './views/EnvelopeList.vue'
 import MailboxPicker from './views/MailboxPicker.vue'
 import Reader from './views/Reader.vue'
+import { signInAgain } from './api/mail.js'
 import { defaultMailbox, findMailbox, loadAccounts, store } from './store.js'
 
 export default {
@@ -177,6 +185,8 @@ export default {
 	},
 
 	methods: {
+		signInAgain,
+
 		parseHash() {
 			const parts = window.location.hash.replace(/^#\/?/, '').split('/')
 			switch (parts[0]) {

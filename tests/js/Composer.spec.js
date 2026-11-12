@@ -321,4 +321,27 @@ describe('mobile Composer recipient suggestions', () => {
 
 		expect(wrapper.vm.to).toBe('first@example.com, john@example.com, ')
 	})
+
+	it('never sends unsigned without asking when the sender has an S/MIME certificate', async () => {
+		const { sendMessage } = await import('../../src/api/mail.js')
+		const { store } = await import('../../src/store.js')
+		sendMessage.mockClear()
+		store.accounts[0].smimeCertificateId = 3
+		const signedWrapper = shallowMount(Composer, { mocks: { t: (app, text) => text } })
+		await signedWrapper.setData({ to: 'a@b.example', editorHtml: 'Hi' })
+
+		expect(signedWrapper.find('.composer__smime').exists()).toBe(true)
+		await signedWrapper.vm.send()
+		expect(sendMessage).not.toHaveBeenCalled()
+		expect(signedWrapper.vm.notice).toContain('Send without signing or encryption')
+
+		await signedWrapper.setData({ unsignedOk: true })
+		await signedWrapper.vm.send()
+		expect(sendMessage).toHaveBeenCalledTimes(1)
+		store.accounts[0].smimeCertificateId = undefined
+	})
+
+	it('asks nothing for a sender without a certificate', () => {
+		expect(wrapper.find('.composer__smime').exists()).toBe(false)
+	})
 })
