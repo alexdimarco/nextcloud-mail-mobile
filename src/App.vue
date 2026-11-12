@@ -82,6 +82,12 @@
 					{{ t('mail_mobile', 'No mail account yet. Add one in the full Mail app first.') }}
 					<a class="mob__link" :href="fullAppUrl">{{ t('mail_mobile', 'Open the full Mail app') }}</a>
 				</div>
+				<div v-else-if="store.accounts.some((account) => account.error)" class="mob__empty">
+					{{ t('mail_mobile', 'Could not load your mail folders.') }}
+					<button class="mob__retry" @click="retryLoad">
+						{{ t('mail_mobile', 'Try again') }}
+					</button>
+				</div>
 				<div v-else class="mob__empty">
 					{{ t('mail_mobile', 'No mailbox found') }}
 				</div>
