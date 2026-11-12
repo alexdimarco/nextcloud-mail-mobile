@@ -1,0 +1,42 @@
+<?xml version="1.0"?>
+<!--
+  - SPDX-FileCopyrightText: 2026 Alex DiMarco
+  - SPDX-License-Identifier: AGPL-3.0-only
+-->
+<psalm
+	errorLevel="3"
+	phpVersion="8.2"
+	resolveFromConfigFile="true"
+	findUnusedCode="false"
+	findUnusedBaselineEntry="false"
+	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xmlns="https://getpsalm.org/schema/config"
+	xsi:schemaLocation="https://getpsalm.org/schema/config vendor/vimeo/psalm/config.xsd">
+	<projectFiles>
+		<directory name="lib"/>
+	</projectFiles>
+	<extraFiles>
+		<directory name="vendor/nextcloud/ocp"/>
+		<directory name="vendor/symfony/console"/>
+		<directory name="vendor/psr"/>
+		<directory name="vendor-scoped/src"/>
+	</extraFiles>
+	<stubs>
+		<!-- the few Mail classes lib/Mail/MailBridge.php uses -->
+		<file name="tests/php/stubs/mail.php"/>
+	</stubs>
+	<issueHandlers>
+		<UndefinedDocblockClass>
+			<errorLevel type="suppress">
+				<!-- the database layer Nextcloud ships; not in the OCP stubs -->
+				<referencedClass name="Doctrine\DBAL\*"/>
+			</errorLevel>
+		</UndefinedDocblockClass>
+		<ArgumentTypeCoercion>
+			<errorLevel type="suppress">
+				<!-- reported inside the OCP stubs themselves, not this app -->
+				<directory name="vendor/nextcloud/ocp"/>
+			</errorLevel>
+		</ArgumentTypeCoercion>
+	</issueHandlers>
+</psalm>

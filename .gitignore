@@ -1,0 +1,12 @@
+# SPDX-FileCopyrightText: 2026 Alex DiMarco
+# SPDX-License-Identifier: AGPL-3.0-only
+
+/node_modules/
+/vendor/
+/vendor-scoped/
+/js/
+/build/
+/.php-cs-fixer.cache
+/.phpunit.cache/
+/tests/integration/.work/
+.DS_Store

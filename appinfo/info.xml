@@ -1,0 +1,48 @@
+<?xml version="1.0"?>
+<!--
+  - SPDX-FileCopyrightText: 2026 Alex DiMarco
+  - SPDX-License-Identifier: AGPL-3.0-only
+-->
+<info xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xsi:noNamespaceSchemaLocation="https://apps.nextcloud.com/schema/apps/info.xsd">
+	<id>mail_mobile</id>
+	<name>Mail Mobile</name>
+	<summary>A phone-friendly web app for Nextcloud Mail</summary>
+	<description><![CDATA[Mail Mobile adds a fast, phone-sized web page for the official Nextcloud Mail app.
+
+- Save it to your home screen on Android or iPhone and open it like an app.
+- Read, reply, reply all, forward, swipe to archive or delete, select many messages at once.
+- Optional push notifications when new mail arrives in your inbox.
+
+Mail Mobile does not replace Mail. It needs the Mail app (version 5.13 or newer, older than 7) and uses your Mail accounts as they are set up there. Mail can update on its own schedule.]]></description>
+	<version>0.1.0</version>
+	<licence>agpl</licence>
+	<author>Alex DiMarco</author>
+	<namespace>MailMobile</namespace>
+	<category>social</category>
+	<category>tools</category>
+	<dependencies>
+		<php min-version="8.2" max-version="8.5"/>
+		<nextcloud min-version="33" max-version="35"/>
+	</dependencies>
+	<repair-steps>
+		<install>
+			<step>OCA\MailMobile\Migration\InstallVapidKeys</step>
+		</install>
+	</repair-steps>
+	<commands>
+		<command>OCA\MailMobile\Command\ResetVapid</command>
+	</commands>
+	<settings>
+		<personal>OCA\MailMobile\Settings\Personal</personal>
+		<personal-section>OCA\MailMobile\Settings\PersonalSection</personal-section>
+	</settings>
+	<navigations>
+		<navigation>
+			<name>Mail Mobile</name>
+			<route>mail_mobile.page.index</route>
+			<icon>app.svg</icon>
+			<order>11</order>
+		</navigation>
+	</navigations>
+</info>

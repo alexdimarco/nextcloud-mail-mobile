@@ -1,0 +1,40 @@
+{
+	"name": "mail-mobile/mail_mobile",
+	"description": "A phone-friendly web app for Nextcloud Mail, with home-screen install and push notifications",
+	"type": "project",
+	"license": "AGPL-3.0-only",
+	"config": {
+		"platform": {
+			"php": "8.2.0"
+		},
+		"sort-packages": true,
+		"optimize-autoloader": true,
+		"autoloader-suffix": "MailMobile"
+	},
+	"require": {
+		"php": ">=8.2 <8.6",
+		"minishlink/web-push": "9.0.4"
+	},
+	"require-dev": {
+		"humbug/php-scoper": "0.18.20",
+		"nextcloud/coding-standard": "1.5.0",
+		"nextcloud/ocp": "v33.0.9",
+		"phpunit/phpunit": "11.5.50",
+		"psalm/phar": "7.3.1"
+	},
+	"autoload-dev": {
+		"psr-4": {
+			"OCA\\MailMobile\\": "lib/",
+			"OCA\\MailMobile\\Tests\\": "tests/php/",
+			"OCP\\": "vendor/nextcloud/ocp/OCP/",
+			"NCU\\": "vendor/nextcloud/ocp/NCU/"
+		}
+	},
+	"scripts": {
+		"cs:check": "php-cs-fixer fix --dry-run --diff",
+		"cs:fix": "php-cs-fixer fix",
+		"psalm": "psalm.phar --no-cache --threads=1",
+		"scope": "php scripts/scope-vendor.php",
+		"test:unit": "phpunit -c tests/php/phpunit.xml"
+	}
+}

@@ -1,0 +1,215 @@
+<!--
+  - SPDX-FileCopyrightText: 2026 Alex DiMarco
+  - SPDX-License-Identifier: AGPL-3.0-only
+-->
+# Mail Mobile
+
+A phone-friendly web page for [Nextcloud Mail](https://github.com/nextcloud/mail).
+Save it to your home screen on Android or iPhone and it opens like an app,
+with optional notifications when new mail arrives.
+
+Mail Mobile is a separate Nextcloud app that sits **beside** the official
+Mail app. It does not change Mail, so Mail can update on its own schedule.
+
+What you can do on the phone page:
+
+- read your inboxes and folders, with conversations grouped if you like
+- swipe a message to archive or delete it, or select many at once
+- reply, reply all, forward, add Cc and Bcc, pick a sender address and a signature
+- attach files
+- get a notification on your phone when new mail arrives in an inbox
+
+## What you need
+
+| | Supported |
+|---|---|
+| Nextcloud | 33, 34, 35 |
+| Mail app | 5.13 or newer, older than 7 |
+| PHP | 8.2 to 8.5 (whatever your Nextcloud version runs on) |
+| Your server address | must use `https://` (phones only allow home-screen apps and notifications on secure sites) |
+| Background jobs | Nextcloud's background jobs set to **Cron**, for notifications |
+
+Mail 7 and newer are refused on purpose until they have been tested. The page
+then says so in plain words instead of breaking.
+
+## Install
+
+### From a release
+
+1. Download `mail_mobile-<version>.tar.gz` from the releases page.
+2. Unpack it into your Nextcloud's `custom_apps` folder (or `apps`), so you
+   get a folder named `mail_mobile`.
+3. Turn it on: `sudo -u www-data php occ app:enable mail_mobile`
+   (or in Nextcloud: **Apps → Your apps → Mail Mobile → Enable**).
+
+### From this repository
+
+You need Node 24, PHP 8.2 or newer and Composer.
+
+```sh
+npm ci && npm run build            # the phone page, into js/
+composer install && composer scope # the web push library, into vendor-scoped/
+scripts/build-release.sh           # puts it all in build/mail_mobile/
+```
+
+Then copy `build/mail_mobile` into `custom_apps` and enable it as above.
+
+## Use it on your phone
+
+Open your Nextcloud's address followed by `/apps/mail_mobile/` on the phone
+and sign in. Each person also finds the link under **Personal settings →
+Mail Mobile**, and in the Nextcloud app menu.
+
+**Android (Chrome, Edge, Firefox)**
+
+1. Open the mailbox list (☰) and tap **Save to home screen**.
+   Chrome shows its own install prompt; otherwise open the browser menu (⋮)
+   and choose **Add to Home screen** or **Install app**.
+2. To get notifications, tap **Enable notifications** in the mailbox list and allow them.
+3. Tap **Send test notification** to check it works.
+
+**iPhone and iPad (Safari, iOS 16.4 or newer for notifications)**
+
+1. In Safari, tap the Share button, then **Add to Home Screen**.
+2. Open Mail from the new home-screen icon. Notifications only work from
+   the home-screen icon, not from inside Safari.
+3. Open the mailbox list (☰), tap **Enable notifications** and allow them.
+4. Tap **Send test notification** to check it works.
+
+## How it relates to the official Mail app
+
+- Mail Mobile uses **your Mail accounts exactly as Mail has them**. To add an
+  account, change a password or set up a signature, use the full Mail app.
+- The phone page talks to Mail through the same web addresses Mail's own
+  screens use (`/apps/mail/api/...`). Every one of those calls is in one
+  file, [`src/api/mail.js`](src/api/mail.js).
+- The server side uses Mail's own code in exactly one file,
+  [`lib/Mail/MailBridge.php`](lib/Mail/MailBridge.php). It checks that Mail is
+  installed, turned on for you, and a version this app was tested with.
+- Mail does not promise these as a public interface. When a Mail update
+  changes one of them, those two files are the ones to fix. Until then, the
+  page shows a plain message such as *"Mail Mobile needs the Mail app,
+  version 5.13 or newer and older than 7. This server has: Mail 7.0.0."*
+
+## Notifications
+
+How they work, step by step:
+
+1. When you tap **Enable notifications**, your browser gives the server a
+   private push address and two keys. They are stored in Nextcloud's
+   database (table `oc_mail_mobile_push_subs`, at most 20 per person).
+2. Mail checks for new mail in the background (or when you refresh).
+   When it stores new mail in an **inbox**, Mail Mobile queues a small
+   background job holding only numbers: who, which mailbox, which messages.
+3. On the next cron run, the job reads the sender and subject through Mail,
+   encrypts them for your phone, and hands them to your browser's push
+   service (Google, Mozilla, Apple or Microsoft). Up to 3 new messages get
+   one notification each; more than 3 get one summary.
+
+**They are not instant.** A notification arrives after Mail's next background
+check plus the next cron run. Mail checks every 15 minutes for people who
+used Mail (or this page) in the last day, hourly after that, and every 6
+hours after three days without use. An admin can set a fixed interval
+(at least 5 minutes) with `app.mail.background-sync-interval` in
+`config.php`. Instant notifications (watching the mailbox live) are not
+part of this version.
+
+**Server keys.** Web push needs a key pair for the server (called VAPID
+keys). They are made when the app is installed. The private key is stored
+encrypted with your Nextcloud's secret. If it may have leaked, make new keys:
+
+```sh
+sudo -u www-data php occ mail_mobile:vapid:reset
+```
+
+This also removes every subscription, so everyone turns notifications on
+again on their phones.
+
+## Privacy
+
+- **What is stored:** for each phone or browser with notifications on: your
+  user name, its push address, its two public keys, and when it was added.
+  They are removed when you turn notifications off, when the push service says
+  the address is gone, or when your Nextcloud account is deleted.
+- **What leaves your server:** only the notifications themselves, sent to the
+  push service of your phone's browser. Their content (sender and subject) is
+  encrypted for your phone; the push service cannot read it. It can see that
+  a notification was sent and when.
+- **Where the server may send:** only to the known push services listed in
+  [`lib/Service/EndpointPolicy.php`](lib/Service/EndpointPolicy.php), over
+  https. Any other address is refused, so the server cannot be made to send
+  requests to machines on its own network.
+- **What waits in the background-job table:** only numbers (user, mailbox and
+  message ids). Sender names and subjects are read when the job runs.
+- Nothing else is collected, and the app sends nothing anywhere else.
+
+## Moving from a modified Mail app
+
+If you ran a modified copy of Mail that had this phone page built in, the
+official Mail app plus Mail Mobile replaces it:
+
+1. Install the official Mail app (5.13 or newer) and Mail Mobile.
+2. Remove what the modified copy left behind (the `oc_` prefix may differ on your server):
+
+   ```sh
+   sudo -u www-data php occ config:app:delete mail mobile_push_vapid_public
+   sudo -u www-data php occ config:app:delete mail mobile_push_vapid_private
+   ```
+
+   and in the database: `DROP TABLE oc_mail_mob_push_subs;`
+3. On each phone, delete the old home-screen icon, open `/apps/mail_mobile/`,
+   save it to the home screen again and turn notifications on again.
+
+## For developers
+
+```sh
+npm ci
+npm test                 # front-end unit tests (vitest)
+npm run lint             # eslint
+npm run build            # production build into js/
+
+composer install
+composer scope           # rename the web push library into vendor-scoped/
+composer test:unit       # PHP unit tests
+composer psalm           # static analysis
+composer cs:check        # code style
+
+scripts/build-release.sh
+scripts/integration-test.sh 33 5.13.2   # Nextcloud 33 + Mail 5.13.2 in Docker
+```
+
+The integration test starts a throwaway Nextcloud in Docker (images pinned by
+digest), installs Mail from its release (pinned by checksum) and the built app,
+and checks the page, the manifest, the service worker, the push key, the
+allowlist, and the "needs Mail" message.
+
+GitHub runs all of this on every push (see `.github/workflows/ci.yml`),
+including the integration test on Nextcloud 33, 34 and 35. A version tag
+(`v0.1.0`) builds the release tarball (`.github/workflows/release.yml`).
+
+### Layout
+
+| Path | What it is |
+|---|---|
+| `lib/Mail/MailBridge.php` | the only PHP file that uses Mail's code |
+| `src/api/mail.js` | every call to Mail's web addresses |
+| `src/api/push.js` | calls to this app's own notification routes |
+| `src/views/` | the phone screens (mailbox list, message list, reader, composer) |
+| `src/sw.js` | the service worker that shows notifications |
+| `src/reauth.js` | sends you back to the phone page after signing in again |
+| `lib/Service/` | notifications: allowlist, server keys, sending |
+| `lib/Listener/NewMailListener.php` | queues a notification when Mail stores new inbox mail |
+| `lib/BackgroundJob/PushJob.php` | sends it on the next cron run |
+| `scoper.inc.php`, `scripts/scope-vendor.php` | rename the web push library so it never clashes with Nextcloud's own copies |
+
+## Not in this version
+
+- instant notifications (watching the mailbox live with IMAP IDLE)
+- reading mail offline
+- encrypted mail (S/MIME, PGP) in the composer
+- Mail 6 is supported in the code but not yet tested: it has no release yet
+
+## Licence
+
+AGPL-3.0-only, the same as Nextcloud Mail. See [LICENSE](LICENSE). The app
+icons are based on Google's Material icons (Apache-2.0); see `REUSE.toml`.

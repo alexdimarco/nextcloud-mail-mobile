@@ -1,0 +1,48 @@
+# SPDX-FileCopyrightText: 2026 Alex DiMarco
+# SPDX-License-Identifier: AGPL-3.0-only
+#
+# On a version tag (for example v0.1.0): build the app and attach the
+# tarball to a GitHub release. The tarball is not signed; signing for the
+# Nextcloud app store needs the app's private key, which never goes into
+# this repository or its CI.
+
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # 2.40.0
+        with:
+          php-version: '8.2'
+          tools: composer:v2
+          coverage: none
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - name: Check the tag matches the app version
+        run: |
+          version="$(sed -n 's:.*<version>\(.*\)</version>.*:\1:p' appinfo/info.xml | head -n 1)"
+          test "v$version" = "$GITHUB_REF_NAME"
+      - run: composer install --no-interaction --no-progress
+      - run: composer scope
+      - run: npm ci
+      - run: npm run build
+      - run: scripts/build-release.sh
+      - uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
+        with:
+          files: build/mail_mobile-*.tar.gz
+          fail_on_unmatched_files: true
