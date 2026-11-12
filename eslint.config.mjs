@@ -1,7 +1,7 @@
 /**
  * SPDX-FileCopyrightText: 2025 Nextcloud GmbH and Nextcloud contributors
  * SPDX-FileCopyrightText: 2026 Alex DiMarco
- * SPDX-License-Identifier: AGPL-3.0-only
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
 // Adapted from the Nextcloud Mail app's eslint.config.mjs
