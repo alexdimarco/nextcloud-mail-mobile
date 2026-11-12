@@ -20,6 +20,7 @@ use OCP\AppFramework\Http\Attribute\PublicPage;
 use OCP\AppFramework\Http\ContentSecurityPolicy;
 use OCP\AppFramework\Http\DataDisplayResponse;
 use OCP\AppFramework\Http\JSONResponse;
+use OCP\AppFramework\Http\StandaloneTemplateResponse;
 use OCP\AppFramework\Http\TemplateResponse;
 use OCP\AppFramework\Services\IInitialState;
 use OCP\IL10N;
@@ -63,15 +64,20 @@ class PageController extends Controller {
 	 * links the theming app's web manifest, which would make "Add to Home
 	 * Screen" install the full desktop site instead of this page. The bare
 	 * page still carries the sign-in check and the anti-forgery token.
+	 *
+	 * It is a standalone response so that other apps do not add their own
+	 * scripts to it. Without this, the first-run wizard's welcome dialog
+	 * covered the whole phone screen on a person's first sign-in, and other
+	 * apps' desktop scripts were downloaded for nothing.
 	 */
 	#[NoAdminRequired]
 	#[NoCSRFRequired]
-	public function index(): TemplateResponse {
+	public function index(): StandaloneTemplateResponse {
 		$this->addHomeScreenHeaders();
 		$status = $this->bridge->status($this->userId);
 
 		if (!$status->usable) {
-			return new TemplateResponse(Application::APP_ID, 'main', [
+			return new StandaloneTemplateResponse(Application::APP_ID, 'main', [
 				'needsMail' => $this->l->t('Mail Mobile needs the Mail app, version %1$s or newer and older than %2$s. This server has: %3$s.', [
 					'5.13',
 					'7',
@@ -87,7 +93,7 @@ class PageController extends Controller {
 		$this->initialState->provideInitialState('sw-url', $this->urlGenerator->linkToRoute('mail_mobile.page.serviceWorker'));
 		$this->initialState->provideInitialState('sw-scope', $this->scope());
 
-		$response = new TemplateResponse(Application::APP_ID, 'main', [
+		$response = new StandaloneTemplateResponse(Application::APP_ID, 'main', [
 			'needsMail' => null,
 			'script' => $this->mainScript(),
 			'version' => $this->appVersion(),

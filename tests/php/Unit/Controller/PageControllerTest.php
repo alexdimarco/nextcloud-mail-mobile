@@ -15,6 +15,7 @@ use OCA\MailMobile\Mail\MailBridge;
 use OCA\MailMobile\Mail\MailStatus;
 use OCP\App\IAppManager;
 use OCP\AppFramework\Http;
+use OCP\AppFramework\Http\StandaloneTemplateResponse;
 use OCP\AppFramework\Http\TemplateResponse;
 use OCP\AppFramework\Services\IInitialState;
 use OCP\IL10N;
@@ -93,6 +94,10 @@ class PageControllerTest extends TestCase {
 
 		$response = $this->controller()->index();
 
+		// Standalone, so other apps (such as the first-run wizard) do not
+		// put their scripts on the phone page
+		$this->assertInstanceOf(StandaloneTemplateResponse::class, $response);
+		$this->assertSame(TemplateResponse::RENDER_AS_BASE, $response->getRenderAs());
 		$this->assertSame('main', $response->getTemplateName());
 		$this->assertSame('mail_mobile-main.0123456789ab', $response->getParams()['script']);
 		$this->assertNull($response->getParams()['needsMail']);
