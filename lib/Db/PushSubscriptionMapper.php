@@ -54,10 +54,36 @@ class PushSubscriptionMapper extends QBMapper {
 		$qb->executeStatement();
 	}
 
-	public function deleteByEndpointHashAny(string $endpointHash): void {
+	/**
+	 * The row for a push address, whoever it belongs to
+	 */
+	public function findByEndpointHash(string $endpointHash): ?PushSubscription {
+		$qb = $this->db->getQueryBuilder();
+		$qb->select('*')
+			->from($this->getTableName())
+			->where($qb->expr()->eq('endpoint_hash', $qb->createNamedParameter($endpointHash)));
+		$found = $this->findEntities($qb);
+		return $found[0] ?? null;
+	}
+
+	/**
+	 * Remove one of a user's rows by its id (the device list in settings)
+	 */
+	public function deleteByIdForUser(string $userId, int $id): void {
 		$qb = $this->db->getQueryBuilder();
 		$qb->delete($this->getTableName())
-			->where($qb->expr()->eq('endpoint_hash', $qb->createNamedParameter($endpointHash)));
+			->where($qb->expr()->eq('user_id', $qb->createNamedParameter($userId)))
+			->andWhere($qb->expr()->eq('id', $qb->createNamedParameter($id, IQueryBuilder::PARAM_INT)));
+		$qb->executeStatement();
+	}
+
+	/**
+	 * Remove the rows tied to a sign-in that has ended
+	 */
+	public function deleteByTokenId(int $tokenId): void {
+		$qb = $this->db->getQueryBuilder();
+		$qb->delete($this->getTableName())
+			->where($qb->expr()->eq('token_id', $qb->createNamedParameter($tokenId, IQueryBuilder::PARAM_INT)));
 		$qb->executeStatement();
 	}
 

@@ -11,10 +11,10 @@ namespace OCA\MailMobile\Tests\Unit\BackgroundJob;
 
 use OCA\MailMobile\BackgroundJob\PushJob;
 use OCA\MailMobile\Mail\MailBridge;
+use OCA\MailMobile\Service\Preferences;
 use OCA\MailMobile\Service\PushService;
 use OCP\AppFramework\Utility\ITimeFactory;
 use OCP\IL10N;
-use OCP\IURLGenerator;
 use OCP\IUser;
 use OCP\IUserManager;
 use OCP\L10N\IFactory;
@@ -25,17 +25,19 @@ use Psr\Log\NullLogger;
 class PushJobTest extends TestCase {
 	private MailBridge&MockObject $bridge;
 	private PushService&MockObject $pushService;
+	private bool $showDetails = true;
 	private PushJob $job;
 
 	protected function setUp(): void {
 		$this->bridge = $this->createMock(MailBridge::class);
 		$this->bridge->method('isUsable')->willReturn(true);
 		$this->pushService = $this->createMock(PushService::class);
+		$this->job = $this->job($this->bridge);
+	}
 
-		$urls = $this->createMock(IURLGenerator::class);
-		$urls->method('linkToRouteAbsolute')->willReturn('https://cloud.example/apps/mail_mobile/');
-		$urls->method('imagePath')->willReturn('/apps/mail_mobile/img/icon-192.png');
-		$urls->method('getAbsoluteURL')->willReturnCallback(fn (string $path) => 'https://cloud.example' . $path);
+	private function job(MailBridge $bridge): PushJob {
+		$preferences = $this->createMock(Preferences::class);
+		$preferences->method('showDetails')->willReturnCallback(fn () => $this->showDetails);
 
 		$users = $this->createMock(IUserManager::class);
 		$users->method('get')->willReturn($this->createMock(IUser::class));
@@ -47,11 +49,11 @@ class PushJobTest extends TestCase {
 		$l10n->method('get')->willReturn($l);
 		$l10n->method('getUserLanguage')->willReturn('en');
 
-		$this->job = new PushJob(
+		return new PushJob(
 			$this->createMock(ITimeFactory::class),
 			$this->pushService,
-			$this->bridge,
-			$urls,
+			$bridge,
+			$preferences,
 			$users,
 			$l10n,
 			new NullLogger(),
@@ -60,7 +62,7 @@ class PushJobTest extends TestCase {
 
 	public function testOneNotificationPerMessageWithSenderAndSubject(): void {
 		$this->bridge->method('describe')->willReturnMap([
-			['sam', 101, ['from' => 'Alice', 'subject' => 'Lunch?']],
+			['sam', 101, ['from' => 'Alice', 'email' => 'alice@example.com', 'subject' => 'Lunch?']],
 			['sam', 102, null],
 		]);
 
@@ -70,14 +72,40 @@ class PushJobTest extends TestCase {
 
 		$this->assertSame('sam', $result['userId']);
 		$this->assertCount(2, $result['payloads']);
-		$this->assertSame('Alice', $result['payloads'][0]['title']);
+		// The real address next to the name, which any sender can choose
+		$this->assertSame('Alice <alice@example.com>', $result['payloads'][0]['title']);
 		$this->assertSame('Lunch?', $result['payloads'][0]['body']);
-		$this->assertSame('https://cloud.example/apps/mail_mobile/#/msg/7/101', $result['payloads'][0]['url']);
+		// Only the part after "#": cron may not know the server's address
+		$this->assertSame('#/msg/7/101', $result['payloads'][0]['url']);
 		$this->assertSame('message-101', $result['payloads'][0]['tag']);
-		$this->assertSame('https://cloud.example/apps/mail_mobile/img/icon-192.png', $result['payloads'][0]['icon']);
+		$this->assertArrayNotHasKey('icon', $result['payloads'][0]);
 		// A message Mail cannot describe still gets a plain notification
 		$this->assertSame('New message', $result['payloads'][1]['title']);
 		$this->assertSame('', $result['payloads'][1]['body']);
+	}
+
+	public function testHidesSenderAndSubjectUnlessChosen(): void {
+		$this->showDetails = false;
+		$this->bridge->expects($this->never())->method('describe');
+
+		$result = $this->job->buildPayloads([
+			'userId' => 'sam', 'accountId' => 4, 'mailboxId' => 7, 'messageIds' => [101], 'count' => 1,
+		]);
+
+		$this->assertCount(1, $result['payloads']);
+		$this->assertSame('New mail', $result['payloads'][0]['title']);
+		$this->assertSame('1 new message', $result['payloads'][0]['body']);
+		$this->assertSame('#/msg/7/101', $result['payloads'][0]['url']);
+	}
+
+	public function testShowsTheAddressAloneWithoutAName(): void {
+		$this->bridge->method('describe')->willReturn(['from' => 'bob@example.com', 'email' => 'bob@example.com', 'subject' => 'Hi']);
+
+		$result = $this->job->buildPayloads([
+			'userId' => 'sam', 'accountId' => 4, 'mailboxId' => 7, 'messageIds' => [101], 'count' => 1,
+		]);
+
+		$this->assertSame('bob@example.com', $result['payloads'][0]['title']);
 	}
 
 	public function testOneSummaryForManyMessages(): void {
@@ -90,11 +118,11 @@ class PushJobTest extends TestCase {
 		$this->assertCount(1, $result['payloads']);
 		$this->assertSame('New mail', $result['payloads'][0]['title']);
 		$this->assertSame('9 new messages', $result['payloads'][0]['body']);
-		$this->assertSame('https://cloud.example/apps/mail_mobile/#/box/7', $result['payloads'][0]['url']);
+		$this->assertSame('#/box/7', $result['payloads'][0]['url']);
 	}
 
 	public function testShortensLongSubjects(): void {
-		$this->bridge->method('describe')->willReturn(['from' => 'Alice', 'subject' => str_repeat('é', 500)]);
+		$this->bridge->method('describe')->willReturn(['from' => 'Alice', 'email' => 'alice@example.com', 'subject' => str_repeat('é', 500)]);
 
 		$result = $this->job->buildPayloads([
 			'userId' => 'sam', 'accountId' => 4, 'mailboxId' => 7, 'messageIds' => [101], 'count' => 1,
@@ -111,16 +139,7 @@ class PushJobTest extends TestCase {
 	public function testDoesNothingWhenMailIsNoLongerUsable(): void {
 		$bridge = $this->createMock(MailBridge::class);
 		$bridge->method('isUsable')->willReturn(false);
-		$job = new PushJob(
-			$this->createMock(ITimeFactory::class),
-			$this->pushService,
-			$bridge,
-			$this->createMock(IURLGenerator::class),
-			$this->createMock(IUserManager::class),
-			$this->createMock(IFactory::class),
-			new NullLogger(),
-		);
-		$this->assertNull($job->buildPayloads([
+		$this->assertNull($this->job($bridge)->buildPayloads([
 			'userId' => 'sam', 'accountId' => 4, 'mailboxId' => 7, 'messageIds' => [101], 'count' => 1,
 		]));
 	}

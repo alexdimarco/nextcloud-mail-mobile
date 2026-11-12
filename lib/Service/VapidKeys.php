@@ -24,10 +24,20 @@ use Throwable;
  * come from this server. The private key is stored encrypted with
  * Nextcloud's secret and marked sensitive, so it is hidden from config
  * listings and never appears in plain text in the database.
+ *
+ * Keys are only ever made in two places: the install (or upgrade) step,
+ * and `occ mail_mobile:vapid:reset`. Reading never makes new keys: new keys
+ * silently break every phone's subscription, so that must be an admin's
+ * deliberate choice, and it removes the old subscriptions in the same step.
  */
 class VapidKeys {
 	public const CONFIG_PUBLIC = 'vapid_public';
 	public const CONFIG_PRIVATE = 'vapid_private';
+
+	public const STATE_OK = 'ok';
+	public const STATE_MISSING = 'missing';
+	/** Stored, but the private key cannot be decrypted (the server secret changed?) */
+	public const STATE_UNREADABLE = 'unreadable';
 
 	public function __construct(
 		private IAppConfig $appConfig,
@@ -37,36 +47,44 @@ class VapidKeys {
 	}
 
 	/**
-	 * The public key, created on first use if the install step did not run.
+	 * @return self::STATE_* whether usable keys are stored
+	 */
+	public function state(): string {
+		$public = $this->appConfig->getValueString(Application::APP_ID, self::CONFIG_PUBLIC);
+		$stored = $this->storedPrivateKey();
+		if ($public === '' && $stored === '') {
+			return self::STATE_MISSING;
+		}
+		if ($public === '' || $stored === '' || $this->decrypt($stored) === null) {
+			return self::STATE_UNREADABLE;
+		}
+		return self::STATE_OK;
+	}
+
+	/**
+	 * @throws RuntimeException when there are no usable keys
 	 */
 	public function getPublicKey(): string {
-		$public = $this->appConfig->getValueString(Application::APP_ID, self::CONFIG_PUBLIC);
-		if ($public !== '' && $this->readPrivateKey() !== '') {
-			return $public;
-		}
-		$this->create();
-		return $this->appConfig->getValueString(Application::APP_ID, self::CONFIG_PUBLIC);
+		return $this->getKeyPair()['publicKey'];
 	}
 
 	/**
 	 * @return array{publicKey: string, privateKey: string}
+	 * @throws RuntimeException when there are no usable keys
 	 */
 	public function getKeyPair(): array {
-		$public = $this->getPublicKey();
-		$private = $this->readPrivateKey();
-		if ($private === '') {
-			throw new RuntimeException('The web push private key is missing');
+		$public = $this->appConfig->getValueString(Application::APP_ID, self::CONFIG_PUBLIC);
+		$private = $this->decrypt($this->storedPrivateKey());
+		if ($public === '' || $private === null) {
+			throw new RuntimeException('The web push keys are missing or cannot be decrypted. Run: occ mail_mobile:vapid:reset');
 		}
 		return ['publicKey' => $public, 'privateKey' => $private];
 	}
 
-	public function exists(): bool {
-		return $this->appConfig->getValueString(Application::APP_ID, self::CONFIG_PUBLIC) !== ''
-			&& $this->readPrivateKey() !== '';
-	}
-
 	/**
-	 * Make a new key pair and store it, replacing any old one.
+	 * Make a new key pair and store it, replacing any old one. Only for the
+	 * install step and the reset command, which also removes every
+	 * subscription made with the old keys.
 	 */
 	public function create(): void {
 		$keys = VAPID::createVapidKeys();
@@ -82,17 +100,20 @@ class VapidKeys {
 		$this->appConfig->setValueString(Application::APP_ID, self::CONFIG_PUBLIC, $keys['publicKey']);
 	}
 
-	private function readPrivateKey(): string {
-		$stored = $this->appConfig->getValueString(Application::APP_ID, self::CONFIG_PRIVATE, '', lazy: true);
+	private function storedPrivateKey(): string {
+		return $this->appConfig->getValueString(Application::APP_ID, self::CONFIG_PRIVATE, '', lazy: true);
+	}
+
+	private function decrypt(string $stored): ?string {
 		if ($stored === '') {
-			return '';
+			return null;
 		}
 		try {
-			return $this->crypto->decrypt($stored);
+			$private = $this->crypto->decrypt($stored);
+			return $private !== '' ? $private : null;
 		} catch (Throwable $e) {
-			// For example after the server secret changed: make new keys
-			$this->logger->warning('Could not decrypt the web push private key; new keys will be made', ['exception' => $e]);
-			return '';
+			$this->logger->error('Could not decrypt the web push private key. Notifications are off until an admin runs: occ mail_mobile:vapid:reset', ['exception' => $e]);
+			return null;
 		}
 	}
 }

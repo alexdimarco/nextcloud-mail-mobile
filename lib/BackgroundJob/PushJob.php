@@ -11,14 +11,15 @@ namespace OCA\MailMobile\BackgroundJob;
 
 use OCA\MailMobile\AppInfo\Application;
 use OCA\MailMobile\Mail\MailBridge;
+use OCA\MailMobile\Service\Preferences;
 use OCA\MailMobile\Service\PushService;
 use OCP\AppFramework\Utility\ITimeFactory;
 use OCP\BackgroundJob\QueuedJob;
-use OCP\IURLGenerator;
 use OCP\IUserManager;
 use OCP\L10N\IFactory;
 use Psr\Log\LoggerInterface;
 use Throwable;
+use function count;
 use function is_array;
 use function is_int;
 use function is_string;
@@ -36,7 +37,7 @@ class PushJob extends QueuedJob {
 		ITimeFactory $time,
 		private PushService $pushService,
 		private MailBridge $bridge,
-		private IURLGenerator $urlGenerator,
+		private Preferences $preferences,
 		private IUserManager $userManager,
 		private IFactory $l10nFactory,
 		private LoggerInterface $logger,
@@ -62,8 +63,17 @@ class PushJob extends QueuedJob {
 	}
 
 	/**
+	 * The notifications for one batch of new mail.
+	 *
+	 * Addresses are only the part after "#": this runs in cron, where the
+	 * server's own web address is often unknown, and the phone resolves the
+	 * fragment against the page it was installed from.
+	 *
+	 * Sender and subject are only included when the person chose that:
+	 * phones show notifications on the lock screen.
+	 *
 	 * @param mixed $argument
-	 * @return ?array{userId: string, payloads: list<array{title: string, body: string, url: string, tag: string, icon: string}>}
+	 * @return ?array{userId: string, payloads: list<array{title: string, body: string, url: string, tag: string}>}
 	 */
 	public function buildPayloads($argument): ?array {
 		if (!is_array($argument)
@@ -83,17 +93,16 @@ class PushJob extends QueuedJob {
 
 		$user = $this->userManager->get($userId);
 		$l = $this->l10nFactory->get(Application::APP_ID, $user !== null ? $this->l10nFactory->getUserLanguage($user) : null);
-		$base = $this->urlGenerator->linkToRouteAbsolute('mail_mobile.page.index');
-		$icon = $this->urlGenerator->getAbsoluteURL($this->urlGenerator->imagePath(Application::APP_ID, 'icon-192.png'));
 
 		$messageIds = array_values(array_filter($argument['messageIds'], 'is_int'));
-		if ($count > MailBridge::MAX_MESSAGES || $messageIds === []) {
+		if (!$this->preferences->showDetails($userId) || $count > MailBridge::MAX_MESSAGES || $messageIds === []) {
 			return ['userId' => $userId, 'payloads' => [[
 				'title' => $l->t('New mail'),
 				'body' => $l->n('%n new message', '%n new messages', max(1, $count)),
-				'url' => $base . '#/box/' . $mailboxId,
+				'url' => $count === 1 && count($messageIds) === 1
+					? '#/msg/' . $mailboxId . '/' . $messageIds[0]
+					: '#/box/' . $mailboxId,
 				'tag' => 'mailbox-' . $mailboxId,
-				'icon' => $icon,
 			]]];
 		}
 
@@ -101,13 +110,24 @@ class PushJob extends QueuedJob {
 		foreach ($messageIds as $messageId) {
 			$details = $this->bridge->describe($userId, $messageId);
 			$payloads[] = [
-				'title' => ($details !== null && $details['from'] !== '') ? mb_substr($details['from'], 0, self::MAX_TEXT) : $l->t('New message'),
+				'title' => $details !== null ? $this->senderTitle($details['from'], $details['email']) : $l->t('New message'),
 				'body' => $details !== null ? mb_substr($details['subject'], 0, self::MAX_TEXT) : '',
-				'url' => $base . '#/msg/' . $mailboxId . '/' . $messageId,
+				'url' => '#/msg/' . $mailboxId . '/' . $messageId,
 				'tag' => 'message-' . $messageId,
-				'icon' => $icon,
 			];
 		}
 		return ['userId' => $userId, 'payloads' => $payloads];
+	}
+
+	/**
+	 * "Name <address>": the display name alone is whatever the sender
+	 * typed (for example "IT Support"), so the real address is shown too.
+	 */
+	private function senderTitle(string $name, string $email): string {
+		$name = mb_substr($name, 0, self::MAX_TEXT);
+		if ($email === '' || $name === $email) {
+			return $email !== '' ? $email : $name;
+		}
+		return $name !== '' ? $name . ' <' . $email . '>' : $email;
 	}
 }

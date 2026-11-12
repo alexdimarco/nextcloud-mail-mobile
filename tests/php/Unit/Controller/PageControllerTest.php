@@ -13,6 +13,8 @@ use OC_Util;
 use OCA\MailMobile\Controller\PageController;
 use OCA\MailMobile\Mail\MailBridge;
 use OCA\MailMobile\Mail\MailStatus;
+use OCA\MailMobile\Service\Preferences;
+use OCA\MailMobile\Service\SourceLink;
 use OCP\App\IAppManager;
 use OCP\AppFramework\Http;
 use OCP\AppFramework\Http\StandaloneTemplateResponse;
@@ -70,6 +72,8 @@ class PageControllerTest extends TestCase {
 			$this->initialState,
 			$urls,
 			$l,
+			$this->createMock(Preferences::class),
+			$this->createMock(SourceLink::class),
 			$this->jsDir,
 		);
 	}

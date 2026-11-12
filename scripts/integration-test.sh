@@ -9,6 +9,8 @@
 #   - the home-screen manifest is valid JSON with the right scope
 #   - the service worker is served with its Service-Worker-Allowed header
 #   - the push key route hands out a public key, and occ can reset it
+#   - signing out removes the notification subscriptions of that sign-in
+#   - the personal and admin settings pages show this app's sections
 #   - with Mail turned off, the page says plainly that Mail is needed
 #
 # Usage: scripts/integration-test.sh [nextcloud-major] [mail-version]
@@ -138,6 +140,42 @@ status="$(curl -s -o /dev/null -w '%{http_code}' -c "$jar" -b "$jar" -u "admin:$
 	-d '{"endpoint":"https://fcm.googleapis.com/fcm/send/x","p256dh":"x","auth":"y"}' "$base/index.php/apps/mail_mobile/push")"
 [ "$status" != "200" ] || fail "a subscription without the anti-forgery token was accepted"
 echo "ok: 400"
+
+step "Signing out stops the notifications that sign-in turned on"
+# A real browser sign-in (form login), so there is a session sign-in to end
+login() {
+	rm -f "$1"
+	local page_token
+	page_token="$(curl -fsS -c "$1" -b "$1" "$base/index.php/login" | python3 -c 'import re,sys; print(re.search(r"data-requesttoken=\"([^\"]+)\"", sys.stdin.read()).group(1))')"
+	# Nextcloud only accepts a sign-in form sent from its own pages (Origin)
+	curl -s -o /dev/null -c "$1" -b "$1" -H "Origin: $base" --data-urlencode "user=admin" --data-urlencode "password=$password" \
+		--data-urlencode "requesttoken=$page_token" "$base/index.php/login"
+	curl -fsS -c "$1" -b "$1" "$base/index.php/csrftoken" | python3 -c 'import json,sys; print(json.load(sys.stdin)["token"])'
+}
+check_subscribed() {
+	curl -fsS -c "$1" -b "$1" -H "requesttoken: $2" -H 'Content-Type: application/json' \
+		-d '{"endpoint":"https://fcm.googleapis.com/fcm/send/it-test"}' "$base/index.php/apps/mail_mobile/push/check" \
+		| python3 -c 'import json,sys; print(json.load(sys.stdin)["subscribed"])'
+}
+phone="$work/phone-cookies"
+phone_token="$(login "$phone")"
+status="$(curl -s -o "$work/subscribe.json" -w '%{http_code}' -c "$phone" -b "$phone" \
+	-H "requesttoken: $phone_token" -H 'Content-Type: application/json' \
+	-d '{"endpoint":"https://fcm.googleapis.com/fcm/send/it-test","p256dh":"x","auth":"y"}' "$base/index.php/apps/mail_mobile/push")"
+[ "$status" = "200" ] || { cat "$work/subscribe.json" >&2; fail "subscribing answered $status"; }
+[ "$(check_subscribed "$phone" "$phone_token")" = "True" ] || fail "the new subscription is not reported as this user's"
+curl -fsS -c "$phone" -b "$phone" "$base/index.php/settings/user/mail_mobile" | grep -q 'Devices that get notifications' \
+	|| fail "the personal settings page has no device list"
+curl -s -o /dev/null -c "$phone" -b "$phone" "$base/index.php/logout?requesttoken=$(python3 -c 'import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1], safe=""))' "$phone_token")"
+other="$work/other-cookies"
+other_token="$(login "$other")"
+[ "$(check_subscribed "$other" "$other_token")" = "False" ] || fail "the subscription outlived signing out"
+echo "ok: removed at sign-out"
+
+step "The admin settings page asks for a push contact address"
+curl -fsS -c "$other" -b "$other" "$base/index.php/settings/admin/additional" | grep -q 'mail-mobile-admin' \
+	|| fail "no Mail Mobile section in the admin settings"
+echo "ok"
 
 step "The Mail addresses the phone page calls exist in this Mail version"
 for path in "api/accounts" "api/autoComplete?term=sa"; do

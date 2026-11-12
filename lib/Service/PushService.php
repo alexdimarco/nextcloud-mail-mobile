@@ -19,7 +19,9 @@ use Psr\Log\LoggerInterface;
 use Throwable;
 use function hash;
 use function json_encode;
+use function mb_substr;
 use function strlen;
+use function usort;
 
 /**
  * Stores the phones and browsers that asked for notifications, and sends
@@ -28,11 +30,19 @@ use function strlen;
 class PushService {
 	/** Most subscriptions kept per user; the oldest is dropped first */
 	public const MAX_SUBSCRIPTIONS_PER_USER = 20;
+	/** Refusals in a row (401 or 403) after which a subscription is dropped */
+	public const MAX_FAILURES = 3;
+
+	public const SUBSCRIBED = 'subscribed';
+	public const REJECTED = 'rejected';
+	/** The push address is registered to another user */
+	public const CONFLICT = 'conflict';
 
 	public function __construct(
 		private PushSubscriptionMapper $mapper,
 		private VapidKeys $vapidKeys,
 		private WebPushFactory $webPushFactory,
+		private PushSubject $subject,
 		private IURLGenerator $urlGenerator,
 		private ITimeFactory $timeFactory,
 		private LoggerInterface $logger,
@@ -40,26 +50,32 @@ class PushService {
 	}
 
 	/**
-	 * @return bool whether the subscription was accepted
+	 * @param ?int $tokenId the sign-in that asks; the row is removed when it ends
+	 * @param ?string $device a short name for the device list, such as "Chrome on Android"
+	 * @return self::SUBSCRIBED|self::REJECTED|self::CONFLICT
 	 */
-	public function subscribe(string $userId, string $endpoint, string $p256dh, string $auth): bool {
+	public function subscribe(string $userId, string $endpoint, string $p256dh, string $auth, ?int $tokenId = null, ?string $device = null): string {
 		if (!EndpointPolicy::isAllowed($endpoint)) {
 			$this->logger->warning('Rejected a push subscription to an address that is not a known push service');
-			return false;
+			return self::REJECTED;
 		}
 		// Browser keys are short base64url strings; anything else is junk
 		if ($p256dh === '' || strlen($p256dh) > 128 || $auth === '' || strlen($auth) > 64) {
-			return false;
+			return self::REJECTED;
 		}
 
 		$hash = hash('sha256', $endpoint);
-		// A push address belongs to exactly one browser. Replace any earlier
-		// row for it (needed for the unique index, and for shared devices).
-		// The address is an unguessable secret, so this cannot be used to
-		// remove someone else's subscription.
-		$this->mapper->deleteByEndpointHashAny($hash);
-
-		if ($this->mapper->countByUserId($userId) >= self::MAX_SUBSCRIPTIONS_PER_USER) {
+		$existing = $this->mapper->findByEndpointHash($hash);
+		if ($existing !== null && $existing->getUserId() !== $userId) {
+			// Any script on this server's pages can read a browser's push
+			// address, so knowing it must not let one user remove another's
+			// subscription. The phone page drops the old address and asks
+			// the browser for a new one instead.
+			return self::CONFLICT;
+		}
+		if ($existing !== null) {
+			$this->mapper->delete($existing);
+		} elseif ($this->mapper->countByUserId($userId) >= self::MAX_SUBSCRIPTIONS_PER_USER) {
 			$this->mapper->deleteOldestForUser($userId);
 		}
 
@@ -70,7 +86,27 @@ class PushService {
 		$subscription->setPubkey($p256dh);
 		$subscription->setAuthToken($auth);
 		$subscription->setCreatedAt($this->timeFactory->getTime());
+		$subscription->setTokenId($tokenId);
+		$subscription->setDevice($device !== null ? mb_substr($device, 0, 64) : null);
+		$subscription->setFailures(0);
 		$this->mapper->insert($subscription);
+		return self::SUBSCRIBED;
+	}
+
+	/**
+	 * Whether this push address is registered to this user. Also moves the
+	 * row to the current sign-in: Nextcloud replaces a session's sign-in
+	 * when it renews it, so the phone page reports the new one on each visit.
+	 */
+	public function isSubscribed(string $userId, string $endpoint, ?int $tokenId): bool {
+		$existing = $this->mapper->findByEndpointHash(hash('sha256', $endpoint));
+		if ($existing === null || $existing->getUserId() !== $userId) {
+			return false;
+		}
+		if ($tokenId !== null && $existing->getTokenId() !== $tokenId) {
+			$existing->setTokenId($tokenId);
+			$this->mapper->update($existing);
+		}
 		return true;
 	}
 
@@ -83,12 +119,45 @@ class PushService {
 	}
 
 	/**
+	 * @return list<array{id: int, device: string, createdAt: int}> for the device list
+	 */
+	public function devices(string $userId): array {
+		$devices = [];
+		foreach ($this->mapper->findByUserId($userId) as $subscription) {
+			$devices[] = [
+				'id' => (int)$subscription->getId(),
+				'device' => (string)($subscription->getDevice() ?? ''),
+				'createdAt' => (int)$subscription->getCreatedAt(),
+			];
+		}
+		usort($devices, static fn (array $a, array $b): int => $b['createdAt'] <=> $a['createdAt']);
+		return $devices;
+	}
+
+	public function removeDevice(string $userId, int $id): void {
+		$this->mapper->deleteByIdForUser($userId, $id);
+	}
+
+	/**
+	 * A sign-in ended (sign-out, or the device was revoked in Security
+	 * settings): stop notifications that it turned on.
+	 */
+	public function removeForToken(int $tokenId): void {
+		$this->mapper->deleteByTokenId($tokenId);
+	}
+
+	public function removeAllForUser(string $userId): void {
+		$this->mapper->deleteByUserId($userId);
+	}
+
+	/**
 	 * Send notifications to every subscription of the user.
 	 *
 	 * This talks to outside push services, so it belongs in a background
 	 * job, never in a request someone is waiting on (except the test button).
 	 *
-	 * @param list<array{title: string, body: string, url?: string, tag?: string, icon?: string}> $payloads
+	 * @param list<array{title: string, body: string, url?: string, tag?: string}> $payloads
+	 *                                                                                       url is only the part after "#"; the phone resolves it
 	 * @return int how many notifications the push services accepted
 	 */
 	public function pushToUser(string $userId, array $payloads): int {
@@ -100,10 +169,17 @@ class PushService {
 			return 0;
 		}
 
+		$subject = $this->subject->get();
+		if ($subject === null) {
+			// Still try: some push services accept it. The admin settings
+			// page warns about this.
+			$subject = $this->urlGenerator->getAbsoluteURL('/');
+			$this->logger->warning('Mail Mobile has no usable contact address for push services. Set one under Administration settings → Mail Mobile.');
+		}
 		try {
 			$keys = $this->vapidKeys->getKeyPair();
 			$webPush = $this->webPushFactory->create([
-				'subject' => $this->urlGenerator->getAbsoluteURL('/'),
+				'subject' => $subject,
 				'publicKey' => $keys['publicKey'],
 				'privateKey' => $keys['privateKey'],
 			]);
@@ -141,16 +217,36 @@ class PushService {
 		$delivered = 0;
 		try {
 			foreach ($webPush->flush() as $report) {
+				$endpoint = $report->getEndpoint();
+				$subscription = $byEndpoint[$endpoint] ?? null;
 				if ($report->isSuccess()) {
 					$delivered++;
+					if ($subscription !== null && $subscription->getFailures() > 0) {
+						$subscription->setFailures(0);
+						$this->mapper->update($subscription);
+					}
 					continue;
 				}
-				$endpoint = $report->getEndpoint();
-				if ($report->isSubscriptionExpired() && isset($byEndpoint[$endpoint])) {
+				if ($subscription === null) {
+					continue;
+				}
+				if ($report->isSubscriptionExpired()) {
 					// The browser revoked or replaced this subscription
-					$this->mapper->delete($byEndpoint[$endpoint]);
+					$this->mapper->delete($subscription);
 					unset($byEndpoint[$endpoint]);
 					continue;
+				}
+				$status = $report->getResponse()?->getStatusCode();
+				if ($status === 401 || $status === 403) {
+					// The push service no longer accepts this server's key
+					// for this subscription, for example after new keys
+					$subscription->setFailures($subscription->getFailures() + 1);
+					if ($subscription->getFailures() >= self::MAX_FAILURES) {
+						$this->mapper->delete($subscription);
+						unset($byEndpoint[$endpoint]);
+						continue;
+					}
+					$this->mapper->update($subscription);
 				}
 				$this->logger->warning('Web push delivery failed: ' . $report->getReason());
 			}

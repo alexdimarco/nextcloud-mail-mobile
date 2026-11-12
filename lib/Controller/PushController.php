@@ -11,7 +11,10 @@ declare(strict_types=1);
 namespace OCA\MailMobile\Controller;
 
 use OCA\MailMobile\AppInfo\Application;
+use OCA\MailMobile\Service\DeviceName;
+use OCA\MailMobile\Service\Preferences;
 use OCA\MailMobile\Service\PushService;
+use OCA\MailMobile\Service\SessionToken;
 use OCA\MailMobile\Service\VapidKeys;
 use OCP\AppFramework\Controller;
 use OCP\AppFramework\Http;
@@ -21,7 +24,6 @@ use OCP\AppFramework\Http\Attribute\UserRateLimit;
 use OCP\AppFramework\Http\JSONResponse;
 use OCP\IL10N;
 use OCP\IRequest;
-use OCP\IURLGenerator;
 use Psr\Log\LoggerInterface;
 use Throwable;
 
@@ -37,7 +39,8 @@ class PushController extends Controller {
 		private ?string $userId,
 		private PushService $pushService,
 		private VapidKeys $vapidKeys,
-		private IURLGenerator $urlGenerator,
+		private SessionToken $sessionToken,
+		private Preferences $preferences,
 		private IL10N $l,
 		private LoggerInterface $logger,
 	) {
@@ -46,7 +49,8 @@ class PushController extends Controller {
 
 	/**
 	 * The server's public push key, which browsers need to subscribe.
-	 * Read-only and not secret, so no anti-forgery token is needed.
+	 * Read-only and not secret, so no anti-forgery token is needed. It
+	 * never makes keys: see VapidKeys.
 	 */
 	#[NoAdminRequired]
 	#[NoCSRFRequired]
@@ -54,8 +58,8 @@ class PushController extends Controller {
 		try {
 			return new JSONResponse(['publicKey' => $this->vapidKeys->getPublicKey()]);
 		} catch (Throwable $e) {
-			$this->logger->error('Could not load or create the web push keys: ' . $e->getMessage(), ['exception' => $e]);
-			return new JSONResponse(['message' => 'Push keys are not available'], Http::STATUS_INTERNAL_SERVER_ERROR);
+			$this->logger->error('Web push keys are not available: ' . $e->getMessage(), ['exception' => $e]);
+			return new JSONResponse(['message' => 'Notifications are not set up on this server'], Http::STATUS_SERVICE_UNAVAILABLE);
 		}
 	}
 
@@ -65,10 +69,34 @@ class PushController extends Controller {
 		if ($this->userId === null) {
 			return new JSONResponse([], Http::STATUS_UNAUTHORIZED);
 		}
-		if (!$this->pushService->subscribe($this->userId, $endpoint, $p256dh, $auth)) {
-			return new JSONResponse(['message' => 'This push address is not accepted'], Http::STATUS_BAD_REQUEST);
+		$result = $this->pushService->subscribe(
+			$this->userId,
+			$endpoint,
+			$p256dh,
+			$auth,
+			$this->sessionToken->currentId(),
+			DeviceName::fromUserAgent($this->request->getHeader('User-Agent')),
+		);
+		return match ($result) {
+			PushService::SUBSCRIBED => new JSONResponse([]),
+			PushService::CONFLICT => new JSONResponse(['message' => 'This push address belongs to another account'], Http::STATUS_CONFLICT),
+			default => new JSONResponse(['message' => 'This push address is not accepted'], Http::STATUS_BAD_REQUEST),
+		};
+	}
+
+	/**
+	 * Whether this browser's push address is still registered to the
+	 * person signed in now. A POST, so the address never lands in logs.
+	 */
+	#[NoAdminRequired]
+	#[UserRateLimit(limit: 120, period: 3600)]
+	public function check(string $endpoint): JSONResponse {
+		if ($this->userId === null) {
+			return new JSONResponse([], Http::STATUS_UNAUTHORIZED);
 		}
-		return new JSONResponse([]);
+		return new JSONResponse([
+			'subscribed' => $this->pushService->isSubscribed($this->userId, $endpoint, $this->sessionToken->currentId()),
+		]);
 	}
 
 	#[NoAdminRequired]
@@ -78,6 +106,15 @@ class PushController extends Controller {
 		}
 		$this->pushService->unsubscribe($this->userId, $endpoint);
 		return new JSONResponse([]);
+	}
+
+	#[NoAdminRequired]
+	public function preferences(bool $showDetails): JSONResponse {
+		if ($this->userId === null) {
+			return new JSONResponse([], Http::STATUS_UNAUTHORIZED);
+		}
+		$this->preferences->setShowDetails($this->userId, $showDetails);
+		return new JSONResponse(['showDetails' => $showDetails]);
 	}
 
 	/**
@@ -93,9 +130,8 @@ class PushController extends Controller {
 		$delivered = $this->pushService->pushToUser($this->userId, [[
 			'title' => 'Mail Mobile',
 			'body' => $this->l->t('Notifications are working'),
-			'url' => $this->urlGenerator->linkToRouteAbsolute('mail_mobile.page.index'),
+			'url' => '#/',
 			'tag' => 'test',
-			'icon' => $this->urlGenerator->getAbsoluteURL($this->urlGenerator->imagePath(Application::APP_ID, 'icon-192.png')),
 		]]);
 		return new JSONResponse(['delivered' => $delivered]);
 	}

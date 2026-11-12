@@ -28,6 +28,12 @@ use OCP\DB\Types;
  * @method void setAuthToken(string $authToken)
  * @method int getCreatedAt()
  * @method void setCreatedAt(int $createdAt)
+ * @method ?int getTokenId()
+ * @method void setTokenId(?int $tokenId)
+ * @method ?string getDevice()
+ * @method void setDevice(?string $device)
+ * @method int getFailures()
+ * @method void setFailures(int $failures)
  */
 class PushSubscription extends Entity {
 	protected $userId;
@@ -36,8 +42,17 @@ class PushSubscription extends Entity {
 	protected $pubkey;
 	protected $authToken;
 	protected $createdAt;
+	/** The Nextcloud sign-in (session or app password) that turned it on */
+	protected $tokenId;
+	/** For the device list in settings, for example "Chrome on Android" */
+	protected $device;
+	/** Refusals in a row from the push service (401 or 403) */
+	protected $failures = 0;
 
 	public function __construct() {
 		$this->addType('createdAt', Types::BIGINT);
+		$this->addType('tokenId', Types::BIGINT);
+		$this->addType('device', Types::STRING);
+		$this->addType('failures', Types::INTEGER);
 	}
 }

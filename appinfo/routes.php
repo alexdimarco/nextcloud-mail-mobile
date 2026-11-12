@@ -16,5 +16,10 @@ return [
 		['name' => 'push#subscribe', 'url' => '/push', 'verb' => 'POST'],
 		['name' => 'push#unsubscribe', 'url' => '/push', 'verb' => 'DELETE'],
 		['name' => 'push#test', 'url' => '/push/test', 'verb' => 'POST'],
+		['name' => 'push#check', 'url' => '/push/check', 'verb' => 'POST'],
+		['name' => 'push#preferences', 'url' => '/push/preferences', 'verb' => 'PUT'],
+		['name' => 'settings#savePreferences', 'url' => '/settings/preferences', 'verb' => 'POST'],
+		['name' => 'settings#removeDevice', 'url' => '/settings/devices/{id}/remove', 'verb' => 'POST'],
+		['name' => 'settings#saveSubject', 'url' => '/settings/subject', 'verb' => 'POST'],
 	],
 ];

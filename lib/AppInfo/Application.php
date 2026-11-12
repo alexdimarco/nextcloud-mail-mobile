@@ -11,6 +11,7 @@ namespace OCA\MailMobile\AppInfo;
 
 use OCA\MailMobile\Listener\MailPageScriptListener;
 use OCA\MailMobile\Listener\NewMailListener;
+use OCA\MailMobile\Listener\SignInEndedListener;
 use OCA\MailMobile\Listener\UserDeletedListener;
 use OCA\MailMobile\Mail\MailBridge;
 use OCP\AppFramework\App;
@@ -18,6 +19,8 @@ use OCP\AppFramework\Bootstrap\IBootContext;
 use OCP\AppFramework\Bootstrap\IBootstrap;
 use OCP\AppFramework\Bootstrap\IRegistrationContext;
 use OCP\AppFramework\Http\Events\BeforeTemplateRenderedEvent;
+use OCP\Authentication\Events\TokenInvalidatedEvent;
+use OCP\User\Events\PasswordUpdatedEvent;
 use OCP\User\Events\UserDeletedEvent;
 
 class Application extends App implements IBootstrap {
@@ -42,6 +45,8 @@ class Application extends App implements IBootstrap {
 		$context->registerEventListener(MailBridge::NEW_MESSAGES_EVENT, NewMailListener::class);
 		$context->registerEventListener(BeforeTemplateRenderedEvent::class, MailPageScriptListener::class);
 		$context->registerEventListener(UserDeletedEvent::class, UserDeletedListener::class);
+		$context->registerEventListener(TokenInvalidatedEvent::class, SignInEndedListener::class);
+		$context->registerEventListener(PasswordUpdatedEvent::class, SignInEndedListener::class);
 	}
 
 	#[\Override]

@@ -38,11 +38,17 @@ export const store = Vue.observable({
 	mailVersion: loadState('mail_mobile', 'mail-version', ''),
 	swUrl: loadState('mail_mobile', 'sw-url', ''),
 	swScope: loadState('mail_mobile', 'sw-scope', ''),
+	iconUrl: loadState('mail_mobile', 'icon-url', ''),
+	// show sender and subject in notifications (off unless chosen)
+	showDetails: loadState('mail_mobile', 'show-details', false),
+	sourceUrl: loadState('mail_mobile', 'source-url', ''),
 	buildVersion,
 	// Group the message list by conversation (threaded view). Saved.
 	threaded: readFlag('mail_mobile-threaded'),
 	// null | 'AUTHENTICATION_FAILED' | 'RATE_LIMITED' | 'MAIL_SERVER_UNAVAILABLE'
 	authError: null,
+	// signing in again did not help: show a "Sign in again" button
+	sessionExpired: false,
 	// reply details handed from Reader to Composer
 	composerPrefill: null,
 	// message handed from EnvelopeList to Reader

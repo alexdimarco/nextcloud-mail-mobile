@@ -52,16 +52,28 @@ class VapidKeysTest extends TestCase {
 		$this->keys = new VapidKeys($config, $crypto, new NullLogger());
 	}
 
-	public function testMakesKeysOnFirstUse(): void {
-		$this->assertFalse($this->keys->exists());
-		$public = $this->keys->getPublicKey();
+	public function testNeverMakesKeysWhenRead(): void {
+		$this->assertSame(VapidKeys::STATE_MISSING, $this->keys->state());
 
-		$this->assertNotSame('', $public);
-		$this->assertTrue($this->keys->exists());
-		$this->assertSame($public, $this->keys->getPublicKey(), 'the same key is returned once made');
+		$this->expectException(RuntimeException::class);
+		try {
+			$this->keys->getPublicKey();
+		} finally {
+			$this->assertSame([], $this->values, 'reading wrote nothing');
+		}
+	}
+
+	public function testCreateMakesUsableKeys(): void {
+		$this->keys->create();
+
+		$this->assertSame(VapidKeys::STATE_OK, $this->keys->state());
+		$pair = $this->keys->getKeyPair();
+		$this->assertNotSame('', $pair['publicKey']);
+		$this->assertSame($pair['publicKey'], $this->keys->getPublicKey());
 	}
 
 	public function testStoresThePrivateKeyEncryptedAndSensitive(): void {
+		$this->keys->create();
 		$pair = $this->keys->getKeyPair();
 		$stored = $this->values['mail_mobile/vapid_private'];
 
@@ -71,17 +83,22 @@ class VapidKeysTest extends TestCase {
 		$this->assertFalse($this->sensitive['mail_mobile/vapid_public']);
 	}
 
-	public function testMakesNewKeysWhenThePrivateKeyCannotBeRead(): void {
-		$first = $this->keys->getPublicKey();
-		$this->values['mail_mobile/vapid_private'] = 'garbage';
+	public function testRefusesInsteadOfReplacingAnUnreadablePrivateKey(): void {
+		$this->keys->create();
+		$public = $this->values['mail_mobile/vapid_public'];
+		$this->cryptoBroken = true;
 
-		$second = $this->keys->getPublicKey();
-
-		$this->assertNotSame($first, $second);
-		$this->assertSame($second, $this->keys->getKeyPair()['publicKey']);
+		$this->assertSame(VapidKeys::STATE_UNREADABLE, $this->keys->state());
+		try {
+			$this->keys->getKeyPair();
+			$this->fail('an unreadable key must not be used');
+		} catch (RuntimeException) {
+		}
+		$this->assertSame($public, $this->values['mail_mobile/vapid_public'], 'the keys were not replaced');
 	}
 
 	public function testCreateReplacesTheKeys(): void {
+		$this->keys->create();
 		$first = $this->keys->getPublicKey();
 		$this->keys->create();
 		$this->assertNotSame($first, $this->keys->getPublicKey());

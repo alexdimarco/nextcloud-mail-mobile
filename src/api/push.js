@@ -18,6 +18,26 @@ export async function savePushSubscription(endpoint, p256dh, auth) {
 	await axios.post(generateUrl('/apps/mail_mobile/push'), { endpoint, p256dh, auth })
 }
 
+/**
+ * Whether this browser's push address is registered to the person signed
+ * in now. False after they signed out (or someone else used this browser),
+ * after a password change, or after the device was removed in settings.
+ *
+ * @param {string} endpoint the browser's push address
+ * @return {Promise<boolean>} whether it is theirs
+ */
+export async function checkPushSubscription(endpoint) {
+	const resp = await axios.post(generateUrl('/apps/mail_mobile/push/check'), { endpoint })
+	return resp.data?.subscribed === true
+}
+
+/**
+ * @param {boolean} showDetails show sender and subject in notifications
+ */
+export async function savePushPreferences(showDetails) {
+	await axios.put(generateUrl('/apps/mail_mobile/push/preferences'), { showDetails })
+}
+
 export async function deletePushSubscription(endpoint) {
 	await axios.delete(generateUrl('/apps/mail_mobile/push'), { params: { endpoint } })
 }

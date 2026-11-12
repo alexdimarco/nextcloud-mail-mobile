@@ -55,8 +55,22 @@ class Version000100Date20261112000000 extends SimpleMigrationStep {
 		$table->addColumn('created_at', Types::BIGINT, [
 			'notnull' => true,
 		]);
+		// The sign-in that turned notifications on; when it ends (sign-out,
+		// device revoked in Security settings), the row is removed
+		$table->addColumn('token_id', Types::BIGINT, [
+			'notnull' => false,
+		]);
+		$table->addColumn('device', Types::STRING, [
+			'notnull' => false,
+			'length' => 64,
+		]);
+		$table->addColumn('failures', Types::INTEGER, [
+			'notnull' => true,
+			'default' => 0,
+		]);
 		$table->setPrimaryKey(['id']);
 		$table->addIndex(['user_id'], 'mail_mobile_push_uid');
+		$table->addIndex(['token_id'], 'mail_mobile_push_tok');
 		$table->addUniqueIndex(['endpoint_hash'], 'mail_mobile_push_ep');
 
 		return $schema;

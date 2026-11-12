@@ -146,6 +146,7 @@ class MailBridgeTest extends TestCase {
 	public function testDescribesAMessageThroughMail(): void {
 		$address = $this->createMock(Address::class);
 		$address->method('getLabel')->willReturn('Sam Carter');
+		$address->method('getEmail')->willReturn('sam@example.com');
 		$from = $this->createMock(AddressList::class);
 		$from->method('first')->willReturn($address);
 		$message = $this->createMock(Message::class);
@@ -155,7 +156,7 @@ class MailBridgeTest extends TestCase {
 		$manager->expects($this->once())->method('getMessage')->with('sam', 101)->willReturn($message);
 		$this->container->method('get')->with(MailManager::class)->willReturn($manager);
 
-		$this->assertSame(['from' => 'Sam Carter', 'subject' => 'Lunch?'], $this->bridge->describe('sam', 101));
+		$this->assertSame(['from' => 'Sam Carter', 'email' => 'sam@example.com', 'subject' => 'Lunch?'], $this->bridge->describe('sam', 101));
 	}
 
 	public function testFallsBackToTheAddressWithoutAName(): void {
@@ -170,7 +171,7 @@ class MailBridgeTest extends TestCase {
 		$manager->method('getMessage')->willReturn($message);
 		$this->container->method('get')->willReturn($manager);
 
-		$this->assertSame(['from' => 'sam@example.com', 'subject' => ''], $this->bridge->describe('sam', 101));
+		$this->assertSame(['from' => 'sam@example.com', 'email' => 'sam@example.com', 'subject' => ''], $this->bridge->describe('sam', 101));
 	}
 
 	public function testDescribeReturnsNullWhenMailFails(): void {

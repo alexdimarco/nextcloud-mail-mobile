@@ -48,12 +48,32 @@
 				@click="testPush">
 				{{ t('mail_mobile', 'Send test notification') }}
 			</button>
+			<label v-if="pushEnabled" class="picker__details">
+				<input
+					type="checkbox"
+					:checked="store.showDetails"
+					@change="saveShowDetails($event.target.checked)">
+				{{ t('mail_mobile', 'Show sender and subject in notifications') }}
+			</label>
+			<p v-if="pushEnabled" class="picker__install-help">
+				{{ store.showDetails
+					? t('mail_mobile', 'Anyone who sees your locked phone can read who wrote and what about.')
+					: t('mail_mobile', 'Notifications only say "New mail", so your lock screen shows nothing private.') }}
+			</p>
 			<p v-if="pushHint" class="picker__install-help">
 				{{ pushHint }}
 			</p>
 		</div>
 		<a class="picker__full" :href="fullAppUrl">
 			{{ t('mail_mobile', 'Open the full Mail app') }}
+		</a>
+		<a
+			v-if="store.sourceUrl"
+			class="picker__source"
+			:href="store.sourceUrl"
+			target="_blank"
+			rel="noopener noreferrer">
+			{{ t('mail_mobile', 'Source code') }}
 		</a>
 		<p v-if="store.buildVersion || store.version" class="picker__version">
 			Mail Mobile {{ store.buildVersion || store.version }}<template v-if="store.mailVersion">
@@ -68,7 +88,14 @@
 
 <script>
 import { generateUrl } from '@nextcloud/router'
-import { deletePushSubscription, getPushKey, savePushSubscription, sendTestPush } from '../api/push.js'
+import {
+	checkPushSubscription,
+	deletePushSubscription,
+	getPushKey,
+	savePushPreferences,
+	savePushSubscription,
+	sendTestPush,
+} from '../api/push.js'
 import logger from '../logger.js'
 import { store } from '../store.js'
 
@@ -85,7 +112,15 @@ function urlBase64ToUint8Array(base64) {
 // The service worker's address and scope come from the server, which
 // knows whether this server's addresses include /index.php/
 const swScope = () => store.swScope || generateUrl('/apps/mail_mobile/')
-const swUrl = () => store.swUrl || generateUrl('/apps/mail_mobile/sw.js')
+// The icon address rides along, because notifications are sent from a
+// background job that cannot reliably work out this server's address
+/**
+ * @return {string} the service worker's address, with the icon address
+ */
+function swUrl() {
+	const url = store.swUrl || generateUrl('/apps/mail_mobile/sw.js')
+	return store.iconUrl ? url + '?icon=' + encodeURIComponent(store.iconUrl) : url
+}
 
 const ROLE_ORDER = { inbox: 0, drafts: 1, sent: 2, archive: 3, junk: 4, trash: 5 }
 const ROLE_ICONS = { inbox: '📥', drafts: '📝', sent: '📤', archive: '📦', junk: '🚫', trash: '🗑' }
@@ -118,12 +153,31 @@ export default {
 		if (!this.pushSupported) {
 			return
 		}
+		let subscription
 		try {
 			const registration = await window.navigator.serviceWorker.getRegistration(swScope())
-			const subscription = await registration?.pushManager.getSubscription()
-			this.pushEnabled = !!subscription
+			subscription = await registration?.pushManager.getSubscription()
 		} catch (error) {
 			logger.debug('could not determine push subscription state', error)
+			return
+		}
+		if (!subscription) {
+			this.pushEnabled = false
+			return
+		}
+		// The browser remembers the subscription, but it may belong to
+		// someone who signed out, or have been removed in settings: then
+		// this browser must stop receiving it
+		try {
+			if (await checkPushSubscription(subscription.endpoint)) {
+				this.pushEnabled = true
+				return
+			}
+			await subscription.unsubscribe()
+			this.pushEnabled = false
+		} catch (error) {
+			logger.debug('could not check the push subscription with the server', error)
+			this.pushEnabled = true
 		}
 	},
 
@@ -162,15 +216,57 @@ export default {
 					userVisibleOnly: true,
 					applicationServerKey: urlBase64ToUint8Array(key),
 				})
-				const json = subscription.toJSON()
-				await savePushSubscription(subscription.endpoint, json.keys.p256dh, json.keys.auth)
+				await this.saveSubscription(registration, subscription, key)
 				this.pushEnabled = true
 				this.pushHint = this.t('mail_mobile', 'Notifications enabled. New mail is announced after Mail\'s next background check, which can take from a few minutes to an hour.')
 			} catch (error) {
 				logger.error('could not toggle push notifications', error)
-				this.pushHint = this.t('mail_mobile', 'Could not enable notifications.')
+				this.pushHint = error.response?.status === 503
+					? this.t('mail_mobile', 'Notifications are not set up on this server yet. Ask your administrator.')
+					: this.t('mail_mobile', 'Could not enable notifications.')
 			} finally {
 				this.pushBusy = false
+			}
+		},
+
+		/**
+		 * Store the subscription on the server. If the server says the
+		 * address is registered to someone else (an earlier user of this
+		 * browser), drop it and ask the browser for a fresh one.
+		 *
+		 * @param {ServiceWorkerRegistration} registration the worker registration
+		 * @param {PushSubscription} subscription the browser's subscription
+		 * @param {string} key the server's public key
+		 */
+		async saveSubscription(registration, subscription, key) {
+			const save = (sub) => {
+				const json = sub.toJSON()
+				return savePushSubscription(sub.endpoint, json.keys.p256dh, json.keys.auth)
+			}
+			try {
+				await save(subscription)
+			} catch (error) {
+				if (error.response?.status !== 409) {
+					throw error
+				}
+				await subscription.unsubscribe()
+				const fresh = await registration.pushManager.subscribe({
+					userVisibleOnly: true,
+					applicationServerKey: urlBase64ToUint8Array(key),
+				})
+				await save(fresh)
+			}
+		},
+
+		async saveShowDetails(value) {
+			const before = this.store.showDetails
+			this.store.showDetails = value
+			try {
+				await savePushPreferences(value)
+			} catch (error) {
+				logger.error('could not save the notification preference', error)
+				this.store.showDetails = before
+				this.pushHint = this.t('mail_mobile', 'Could not save the setting.')
 			}
 		},
 
@@ -295,6 +391,21 @@ export default {
 }
 .picker__push-btn {
 	margin-top: 8px;
+}
+.picker__details {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	margin-top: 10px;
+	font-size: 14px;
+	text-align: start;
+}
+.picker__source {
+	display: block;
+	padding: 0 16px 12px;
+	text-align: center;
+	color: var(--mob-text-muted);
+	font-size: 12px;
 }
 .picker__install-help {
 	margin: 10px 0 0;

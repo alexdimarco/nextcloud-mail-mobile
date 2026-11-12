@@ -141,7 +141,7 @@ class MailBridge {
 	 *
 	 * Mail only returns the message when it belongs to this user.
 	 *
-	 * @return ?array{from: string, subject: string} null when it cannot be read
+	 * @return ?array{from: string, email: string, subject: string} null when it cannot be read
 	 */
 	public function describe(string $userId, int $messageId): ?array {
 		try {
@@ -149,9 +149,11 @@ class MailBridge {
 			$manager = $this->container->get(MailManager::class);
 			$message = $manager->getMessage($userId, $messageId);
 			$from = $message->getFrom()->first();
-			$sender = $from !== null ? ($from->getLabel() ?? $from->getEmail() ?? '') : '';
+			$email = $from !== null ? ($from->getEmail() ?? '') : '';
+			$sender = $from !== null ? ($from->getLabel() ?? $email) : '';
 			return [
 				'from' => $sender,
+				'email' => $email,
 				'subject' => $message->getSubject() ?? '',
 			];
 		} catch (Throwable $e) {

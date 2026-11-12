@@ -11,6 +11,8 @@ namespace OCA\MailMobile\Controller;
 
 use OCA\MailMobile\AppInfo\Application;
 use OCA\MailMobile\Mail\MailBridge;
+use OCA\MailMobile\Service\Preferences;
+use OCA\MailMobile\Service\SourceLink;
 use OCP\App\IAppManager;
 use OCP\AppFramework\Controller;
 use OCP\AppFramework\Http;
@@ -51,6 +53,8 @@ class PageController extends Controller {
 		private IInitialState $initialState,
 		private IURLGenerator $urlGenerator,
 		private IL10N $l,
+		private Preferences $preferences,
+		private SourceLink $sourceLink,
 		?string $jsDir = null,
 	) {
 		parent::__construct(Application::APP_ID, $request);
@@ -92,6 +96,11 @@ class PageController extends Controller {
 		$this->initialState->provideInitialState('mail-version', (string)$status->mailVersion);
 		$this->initialState->provideInitialState('sw-url', $this->urlGenerator->linkToRoute('mail_mobile.page.serviceWorker'));
 		$this->initialState->provideInitialState('sw-scope', $this->scope());
+		// Worked out here, in a web request, where the server's address is
+		// known; notifications sent from cron carry no icon address
+		$this->initialState->provideInitialState('icon-url', $this->urlGenerator->imagePath(Application::APP_ID, 'icon-192.png'));
+		$this->initialState->provideInitialState('show-details', $this->userId !== null && $this->preferences->showDetails($this->userId));
+		$this->initialState->provideInitialState('source-url', $this->sourceLink->url());
 
 		$response = new StandaloneTemplateResponse(Application::APP_ID, 'main', [
 			'needsMail' => null,
@@ -99,9 +108,10 @@ class PageController extends Controller {
 			'version' => $this->appVersion(),
 		], TemplateResponse::RENDER_AS_BASE);
 
-		// Message bodies are shown in a sandboxed frame from this same
-		// server (Mail's /api/messages/{id}/html), and notifications need a
-		// service worker from this same server. Nothing else is allowed.
+		// Message bodies are shown in a frame from this same server
+		// (Mail's /api/messages/{id}/html), sandboxed without scripts in
+		// src/views/Reader.vue. Notifications need a service worker from
+		// this same server. Nothing else is allowed.
 		$csp = new ContentSecurityPolicy();
 		$csp->addAllowedFrameDomain('\'self\'');
 		$csp->addAllowedWorkerSrcDomain('\'self\'');
@@ -121,7 +131,8 @@ class PageController extends Controller {
 		$response = new JSONResponse([
 			'id' => $scope,
 			'name' => 'Mail Mobile',
-			'short_name' => 'Mail',
+			// Not just "Mail": that is also the name of the iPhone's own app
+			'short_name' => 'Mail Mobile',
 			'start_url' => $scope,
 			'scope' => $scope,
 			'display' => 'standalone',
@@ -214,7 +225,7 @@ class PageController extends Controller {
 		Util::addHeader('meta', ['name' => 'apple-mobile-web-app-capable', 'content' => 'yes']);
 		Util::addHeader('meta', ['name' => 'mobile-web-app-capable', 'content' => 'yes']);
 		Util::addHeader('meta', ['name' => 'apple-mobile-web-app-status-bar-style', 'content' => 'default']);
-		Util::addHeader('meta', ['name' => 'apple-mobile-web-app-title', 'content' => 'Mail']);
+		Util::addHeader('meta', ['name' => 'apple-mobile-web-app-title', 'content' => 'Mail Mobile']);
 		Util::addHeader('meta', ['name' => 'theme-color', 'content' => self::THEME_COLOR]);
 	}
 }

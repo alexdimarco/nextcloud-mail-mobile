@@ -12,6 +12,7 @@ namespace OCA\MailMobile\Tests\Unit\Service;
 use OCA\MailMobile\Db\PushSubscription;
 use OCA\MailMobile\Db\PushSubscriptionMapper;
 use OCA\MailMobile\Service\PushService;
+use OCA\MailMobile\Service\PushSubject;
 use OCA\MailMobile\Service\VapidKeys;
 use OCA\MailMobile\Service\WebPushFactory;
 use OCA\MailMobile\Vendor\GuzzleHttp\Handler\MockHandler;
@@ -51,7 +52,9 @@ class PushServiceTest extends TestCase {
 		$this->vapidKeys->method('getKeyPair')->willReturn(VAPID::createVapidKeys());
 		$this->network = new MockHandler();
 		$urls = $this->createMock(IURLGenerator::class);
-		$urls->method('getAbsoluteURL')->willReturn('https://cloud.example/');
+		$urls->method('getAbsoluteURL')->willReturn('http://localhost/');
+		$subject = $this->createMock(PushSubject::class);
+		$subject->method('get')->willReturn('mailto:admin@example.com');
 		$time = $this->createMock(ITimeFactory::class);
 		$time->method('getTime')->willReturn(1_800_000_000);
 
@@ -59,6 +62,7 @@ class PushServiceTest extends TestCase {
 			$this->mapper,
 			$this->vapidKeys,
 			new FakeNetworkWebPushFactory($this->network),
+			$subject,
 			$urls,
 			$time,
 			new NullLogger(),
@@ -81,23 +85,24 @@ class PushServiceTest extends TestCase {
 		$subscription->setPubkey($b64($point));
 		$subscription->setAuthToken($b64(random_bytes(16)));
 		$subscription->setCreatedAt(1);
+		$subscription->setFailures(0);
 		return $subscription;
 	}
 
 	public function testRejectsAnAddressThatIsNotAPushService(): void {
 		$this->mapper->expects($this->never())->method('insert');
-		$this->assertFalse($this->service->subscribe('sam', 'https://10.0.0.5/admin', 'key', 'auth'));
+		$this->assertSame(PushService::REJECTED, $this->service->subscribe('sam', 'https://10.0.0.5/admin', 'key', 'auth'));
 	}
 
 	public function testRejectsJunkKeys(): void {
 		$this->mapper->expects($this->never())->method('insert');
-		$this->assertFalse($this->service->subscribe('sam', 'https://fcm.googleapis.com/fcm/send/a', '', 'auth'));
-		$this->assertFalse($this->service->subscribe('sam', 'https://fcm.googleapis.com/fcm/send/a', 'key', str_repeat('a', 65)));
+		$this->assertSame(PushService::REJECTED, $this->service->subscribe('sam', 'https://fcm.googleapis.com/fcm/send/a', '', 'auth'));
+		$this->assertSame(PushService::REJECTED, $this->service->subscribe('sam', 'https://fcm.googleapis.com/fcm/send/a', 'key', str_repeat('a', 65)));
 	}
 
 	public function testStoresAValidSubscription(): void {
 		$endpoint = 'https://fcm.googleapis.com/fcm/send/abc';
-		$this->mapper->expects($this->once())->method('deleteByEndpointHashAny')->with(hash('sha256', $endpoint));
+		$this->mapper->expects($this->once())->method('findByEndpointHash')->with(hash('sha256', $endpoint))->willReturn(null);
 		$this->mapper->method('countByUserId')->willReturn(0);
 		$this->mapper->expects($this->never())->method('deleteOldestForUser');
 		$this->mapper->expects($this->once())->method('insert')->with($this->callback(
@@ -105,10 +110,85 @@ class PushServiceTest extends TestCase {
 				&& $s->getEndpoint() === $endpoint
 				&& $s->getPubkey() === 'key'
 				&& $s->getAuthToken() === 'auth'
-				&& $s->getCreatedAt() === 1_800_000_000,
+				&& $s->getCreatedAt() === 1_800_000_000
+				&& $s->getTokenId() === 55
+				&& $s->getDevice() === 'Firefox on Android',
 		))->willReturnArgument(0);
 
-		$this->assertTrue($this->service->subscribe('sam', $endpoint, 'key', 'auth'));
+		$this->assertSame(PushService::SUBSCRIBED, $this->service->subscribe('sam', $endpoint, 'key', 'auth', 55, 'Firefox on Android'));
+	}
+
+	public function testReplacesTheSameUsersEarlierRowForTheAddress(): void {
+		$endpoint = 'https://fcm.googleapis.com/fcm/send/abc';
+		$old = $this->subscription($endpoint);
+		$this->mapper->method('findByEndpointHash')->willReturn($old);
+		$this->mapper->expects($this->once())->method('delete')->with($old);
+		$this->mapper->expects($this->never())->method('deleteOldestForUser');
+		$this->mapper->expects($this->once())->method('insert')->willReturnArgument(0);
+
+		$this->assertSame(PushService::SUBSCRIBED, $this->service->subscribe('sam', $endpoint, 'key', 'auth'));
+	}
+
+	public function testRefusesAnAddressRegisteredToAnotherUser(): void {
+		$endpoint = 'https://fcm.googleapis.com/fcm/send/abc';
+		$theirs = $this->subscription($endpoint);
+		$theirs->setUserId('alex');
+		$this->mapper->method('findByEndpointHash')->willReturn($theirs);
+		$this->mapper->expects($this->never())->method('delete');
+		$this->mapper->expects($this->never())->method('insert');
+
+		$this->assertSame(PushService::CONFLICT, $this->service->subscribe('sam', $endpoint, 'key', 'auth'));
+	}
+
+	public function testChecksAnAddressAndMovesItToTheCurrentSignIn(): void {
+		$endpoint = 'https://fcm.googleapis.com/fcm/send/abc';
+		$mine = $this->subscription($endpoint);
+		$mine->setTokenId(1);
+		$this->mapper->method('findByEndpointHash')->willReturn($mine);
+		$this->mapper->expects($this->once())->method('update')->with($this->callback(fn (PushSubscription $s) => $s->getTokenId() === 2));
+
+		$this->assertTrue($this->service->isSubscribed('sam', $endpoint, 2));
+		$this->assertFalse($this->service->isSubscribed('alex', $endpoint, 2), 'another user\'s address is not theirs');
+	}
+
+	public function testUnknownAddressIsNotSubscribed(): void {
+		$this->mapper->method('findByEndpointHash')->willReturn(null);
+		$this->assertFalse($this->service->isSubscribed('sam', 'https://fcm.googleapis.com/fcm/send/x', 2));
+	}
+
+	public function testDropsASubscriptionAfterRepeatedRefusals(): void {
+		$refused = $this->subscription('https://fcm.googleapis.com/fcm/send/old-keys');
+		$refused->setFailures(PushService::MAX_FAILURES - 1);
+		$this->mapper->method('findByUserId')->willReturn([$refused]);
+		$this->mapper->expects($this->once())->method('delete')->with($refused);
+		$this->network->append(new Response(403));
+
+		$this->assertSame(0, $this->service->pushToUser('sam', [['title' => 'x', 'body' => 'y']]));
+	}
+
+	public function testCountsAFirstRefusalWithoutDropping(): void {
+		$refused = $this->subscription('https://fcm.googleapis.com/fcm/send/old-keys');
+		$this->mapper->method('findByUserId')->willReturn([$refused]);
+		$this->mapper->expects($this->never())->method('delete');
+		$this->mapper->expects($this->once())->method('update')->with($this->callback(fn (PushSubscription $s) => $s->getFailures() === 1));
+		$this->network->append(new Response(401));
+
+		$this->service->pushToUser('sam', [['title' => 'x', 'body' => 'y']]);
+	}
+
+	public function testUsesTheConfiguredContactAddress(): void {
+		$this->mapper->method('findByUserId')->willReturn([
+			$this->subscription('https://fcm.googleapis.com/fcm/send/abc'),
+		]);
+		$this->network->append(new Response(201));
+
+		$this->service->pushToUser('sam', [['title' => 'x', 'body' => 'y']]);
+
+		// The signed token names the contact address, not http://localhost/
+		$authorization = $this->network->getLastRequest()->getHeaderLine('Authorization');
+		preg_match('/t=([^,]+)/', $authorization, $match);
+		$claims = json_decode(base64_decode(strtr(explode('.', $match[1])[1], '-_', '+/')), true);
+		$this->assertSame('mailto:admin@example.com', $claims['sub']);
 	}
 
 	public function testDropsTheOldestWhenAUserHasTooMany(): void {
@@ -116,7 +196,8 @@ class PushServiceTest extends TestCase {
 		$this->mapper->expects($this->once())->method('deleteOldestForUser')->with('sam');
 		$this->mapper->method('insert')->willReturnArgument(0);
 
-		$this->assertTrue($this->service->subscribe('sam', 'https://web.push.apple.com/abc', 'key', 'auth'));
+		$this->mapper->method('findByEndpointHash')->willReturn(null);
+		$this->assertSame(PushService::SUBSCRIBED, $this->service->subscribe('sam', 'https://web.push.apple.com/abc', 'key', 'auth'));
 	}
 
 	public function testSendsSignedEncryptedNotifications(): void {

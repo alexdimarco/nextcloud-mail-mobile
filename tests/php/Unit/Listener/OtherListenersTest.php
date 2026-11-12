@@ -11,9 +11,14 @@ namespace OCA\MailMobile\Tests\Unit\Listener;
 
 use OCA\MailMobile\Db\PushSubscriptionMapper;
 use OCA\MailMobile\Listener\MailPageScriptListener;
+use OCA\MailMobile\Listener\SignInEndedListener;
 use OCA\MailMobile\Listener\UserDeletedListener;
+use OCA\MailMobile\Service\PushService;
+use OCP\Authentication\Events\TokenInvalidatedEvent;
+use OCP\Authentication\Token\IToken;
 use OCP\EventDispatcher\Event;
 use OCP\IUser;
+use OCP\User\Events\PasswordUpdatedEvent;
 use OCP\User\Events\UserDeletedEvent;
 use PHPUnit\Framework\TestCase;
 
@@ -39,5 +44,24 @@ class OtherListenersTest extends TestCase {
 		$this->assertFalse(MailPageScriptListener::isMailMainPage('mail', 'settings'));
 		$this->assertFalse(MailPageScriptListener::isMailMainPage('files', 'index'));
 		$this->assertFalse(MailPageScriptListener::isMailMainPage('mail_mobile', 'main'));
+	}
+
+	public function testSigningOutOrRevokingADeviceStopsItsNotifications(): void {
+		$token = $this->createMock(IToken::class);
+		$token->method('getId')->willReturn(55);
+		$push = $this->createMock(PushService::class);
+		$push->expects($this->once())->method('removeForToken')->with(55);
+		$push->expects($this->never())->method('removeAllForUser');
+
+		(new SignInEndedListener($push))->handle(new TokenInvalidatedEvent($token));
+	}
+
+	public function testAPasswordChangeStopsAllNotifications(): void {
+		$user = $this->createMock(IUser::class);
+		$user->method('getUID')->willReturn('sam');
+		$push = $this->createMock(PushService::class);
+		$push->expects($this->once())->method('removeAllForUser')->with('sam');
+
+		(new SignInEndedListener($push))->handle(new PasswordUpdatedEvent($user, 'new password'));
 	}
 }

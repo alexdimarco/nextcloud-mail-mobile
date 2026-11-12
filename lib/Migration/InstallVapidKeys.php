@@ -15,8 +15,9 @@ use OCP\Migration\IRepairStep;
 use Throwable;
 
 /**
- * Makes the server's web push key pair when the app is installed.
- * If this fails, the keys are made on first use instead.
+ * Makes the server's web push key pair when the app is installed or
+ * upgraded and no keys exist yet. Existing keys are never replaced here,
+ * even unreadable ones: that would silently break every subscription.
  */
 class InstallVapidKeys implements IRepairStep {
 	public function __construct(
@@ -32,11 +33,14 @@ class InstallVapidKeys implements IRepairStep {
 	#[\Override]
 	public function run(IOutput $output): void {
 		try {
-			if (!$this->vapidKeys->exists()) {
+			$state = $this->vapidKeys->state();
+			if ($state === VapidKeys::STATE_MISSING) {
 				$this->vapidKeys->create();
+			} elseif ($state === VapidKeys::STATE_UNREADABLE) {
+				$output->warning('The web push keys cannot be read. Notifications stay off until you run: occ mail_mobile:vapid:reset');
 			}
 		} catch (Throwable $e) {
-			$output->warning('Could not create the web push keys now; they will be created on first use: ' . $e->getMessage());
+			$output->warning('Could not create the web push keys. Notifications stay off until you run: occ mail_mobile:vapid:reset (' . $e->getMessage() . ')');
 		}
 	}
 }
