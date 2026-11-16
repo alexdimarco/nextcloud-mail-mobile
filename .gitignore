@@ -10,3 +10,6 @@
 /.phpunit.cache/
 /tests/integration/.work/
 .DS_Store
+
+# Python byte code from scripts/check-mail-routes.py
+__pycache__/
