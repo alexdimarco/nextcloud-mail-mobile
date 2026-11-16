@@ -26,7 +26,9 @@ vi.mock('../../src/store.js', () => ({
 
 function mountApp() {
 	window.matchMedia = window.matchMedia ?? (() => ({ matches: false, addEventListener() {}, removeEventListener() {} }))
-	return shallowMount(App, { mocks: { t: (app, text) => text } })
+	return shallowMount(App, {
+		mocks: { t: (app, text, params) => text.replace(/{(\w+)}/g, (match, key) => params?.[key] ?? match) },
+	})
 }
 
 describe('mobile App when no folder could be shown', () => {
@@ -55,5 +57,31 @@ describe('mobile App when no folder could be shown', () => {
 		const wrapper = mountApp()
 		expect(wrapper.text()).toContain('No mailbox found')
 		expect(wrapper.find('.mob__retry').exists()).toBe(false)
+	})
+})
+
+describe('mobile App with a Mail 6 account whose sign-in expired', () => {
+	beforeEach(() => {
+		storeMock.loading = false
+		storeMock.loadError = false
+	})
+
+	it('says which account must be reconnected and links to the full Mail app', () => {
+		storeMock.accounts = [
+			{ id: 1, emailAddress: 'me@example.com', mailboxes: [], oauthNeedsReauth: true },
+			{ id: 2, emailAddress: 'other@example.com', mailboxes: [], oauthNeedsReauth: false },
+		]
+		const wrapper = mountApp()
+		const banners = wrapper.findAll('.mob__banner')
+		expect(banners).toHaveLength(1)
+		expect(banners.at(0).text()).toContain('The sign-in for me@example.com expired')
+		expect(banners.at(0).text()).not.toContain('other@example.com')
+		expect(banners.at(0).find('a').attributes('href')).toContain('/apps/mail/')
+	})
+
+	it('shows nothing extra for Mail 5 accounts, which have no such field', () => {
+		storeMock.accounts = [{ id: 1, emailAddress: 'me@example.com', mailboxes: [] }]
+		const wrapper = mountApp()
+		expect(wrapper.findAll('.mob__banner')).toHaveLength(0)
 	})
 })

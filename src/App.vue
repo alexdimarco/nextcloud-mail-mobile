@@ -65,6 +65,15 @@
 			</template>
 		</div>
 
+		<div
+			v-for="account in accountsToReconnect"
+			:key="'reconnect-' + account.id"
+			class="mob__banner"
+			role="alert">
+			{{ t('mail_mobile', 'The sign-in for {email} expired and could not be renewed. Open the full Mail app and choose Reconnect.', { email: account.emailAddress }) }}
+			<a class="mob__link" :href="fullAppUrl">{{ t('mail_mobile', 'Open the full Mail app') }}</a>
+		</div>
+
 		<div class="mob__panes">
 			<aside
 				v-if="isWide || route.view === 'list' || route.view === 'boxes'"
@@ -162,6 +171,14 @@ export default {
 
 		stale() {
 			return !!store.buildVersion && !!store.version && store.buildVersion !== store.version
+		},
+
+		// Mail 6 marks an account that signs in to the mail server with a
+		// single sign-on token when that token expired and could not be
+		// renewed. Only the full Mail app can reconnect it (its "Reconnect
+		// your mail account" dialog). Mail 5 never sends the field.
+		accountsToReconnect() {
+			return store.accounts.filter((account) => account.oauthNeedsReauth === true)
 		},
 
 		title() {

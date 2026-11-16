@@ -19,6 +19,7 @@ use OCA\Mail\Service\MailManager;
 use OCA\MailMobile\Mail\MailBridge;
 use OCP\App\IAppManager;
 use OCP\EventDispatcher\Event;
+use OCP\IL10N;
 use OCP\IUser;
 use OCP\IUserManager;
 use PHPUnit\Framework\Attributes\DataProvider;
@@ -99,13 +100,14 @@ class MailBridgeTest extends TestCase {
 		$this->assertFalse($this->bridge->isUsable('nobody'));
 	}
 
-	private function event(bool $inbox, int $messages): NewMessagesSynchronized {
+	private function event(bool $inbox, int $messages, bool $namedInbox = false): NewMessagesSynchronized {
 		$account = $this->createMock(Account::class);
 		$account->method('getUserId')->willReturn('sam');
 		$account->method('getId')->willReturn(4);
 		$mailbox = $this->createMock(Mailbox::class);
 		$mailbox->method('getId')->willReturn(7);
 		$mailbox->method('isSpecialUse')->willReturnCallback(fn (string $use) => $inbox && $use === 'inbox');
+		$mailbox->method('isInbox')->willReturn($namedInbox);
 		$list = [];
 		for ($i = 1; $i <= $messages; $i++) {
 			$message = $this->createMock(Message::class);
@@ -133,6 +135,21 @@ class MailBridgeTest extends TestCase {
 
 	public function testIgnoresOtherFolders(): void {
 		$this->assertNull($this->bridge->readNewMessages($this->event(false, 2)));
+	}
+
+	public function testTreatsAMailboxNamedInboxAsTheInbox(): void {
+		// Mail 6 does the same when the server sends no "inbox" mark
+		$newMail = $this->bridge->readNewMessages($this->event(false, 1, true));
+		$this->assertSame([101], $newMail?->messageIds);
+	}
+
+	public function testSaysPlainlyWhichMailVersionsWork(): void {
+		$l = $this->createMock(IL10N::class);
+		$l->method('t')->willReturnCallback(fn (string $text, array $params = []) => vsprintf($text, $params));
+		$this->assertSame(
+			'Mail Mobile needs the Mail app, version 5.13 to 6.x. This server has: Mail 7.0.0.',
+			MailBridge::needsMailMessage($l, 'Mail 7.0.0'),
+		);
 	}
 
 	public function testIgnoresEmptyEvents(): void {
