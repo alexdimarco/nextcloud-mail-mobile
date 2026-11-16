@@ -15,15 +15,19 @@ use OCA\MailMobile\Service\PushService;
 use OCA\MailMobile\Service\PushSubject;
 use OCA\MailMobile\Service\VapidKeys;
 use OCA\MailMobile\Service\WebPushFactory;
+use OCA\MailMobile\Vendor\GuzzleHttp\Exception\ConnectException;
 use OCA\MailMobile\Vendor\GuzzleHttp\Handler\MockHandler;
 use OCA\MailMobile\Vendor\GuzzleHttp\HandlerStack;
+use OCA\MailMobile\Vendor\GuzzleHttp\Psr7\Request;
 use OCA\MailMobile\Vendor\GuzzleHttp\Psr7\Response;
 use OCA\MailMobile\Vendor\Minishlink\WebPush\VAPID;
 use OCP\AppFramework\Utility\ITimeFactory;
 use OCP\IURLGenerator;
 use PHPUnit\Framework\MockObject\MockObject;
 use PHPUnit\Framework\TestCase;
-use Psr\Log\NullLogger;
+use Psr\Log\LoggerInterface;
+use Psr\Log\LoggerTrait;
+use Stringable;
 
 /**
  * Sends to a fake network: every request the web push library makes is
@@ -40,7 +44,29 @@ class FakeNetworkWebPushFactory extends WebPushFactory {
 	}
 }
 
+/**
+ * Keeps every log line, with the messages of any exceptions passed along,
+ * so a test can check what would have been written to the log.
+ */
+class RecordingLogger implements LoggerInterface {
+	use LoggerTrait;
+
+	/** @var list<string> */
+	public array $lines = [];
+
+	public function log($level, string|Stringable $message, array $context = []): void {
+		$line = $level . ': ' . $message;
+		foreach ($context as $value) {
+			if ($value instanceof \Throwable) {
+				$line .= ' | ' . $value->getMessage() . ' | ' . $value->getTraceAsString();
+			}
+		}
+		$this->lines[] = $line;
+	}
+}
+
 class PushServiceTest extends TestCase {
+	private RecordingLogger $logger;
 	private PushSubscriptionMapper&MockObject $mapper;
 	private VapidKeys&MockObject $vapidKeys;
 	private MockHandler $network;
@@ -57,6 +83,7 @@ class PushServiceTest extends TestCase {
 		$subject->method('get')->willReturn('mailto:admin@example.com');
 		$time = $this->createMock(ITimeFactory::class);
 		$time->method('getTime')->willReturn(1_800_000_000);
+		$this->logger = new RecordingLogger();
 
 		$this->service = new PushService(
 			$this->mapper,
@@ -65,7 +92,7 @@ class PushServiceTest extends TestCase {
 			$subject,
 			$urls,
 			$time,
-			new NullLogger(),
+			$this->logger,
 		);
 	}
 
@@ -233,6 +260,42 @@ class PushServiceTest extends TestCase {
 
 		$this->assertSame(0, $this->service->pushToUser('sam', [['title' => 'x', 'body' => 'y']]));
 		$this->assertNull($this->network->getLastRequest());
+	}
+
+	public function testLogsOnlyAFingerprintOfTheAddressWhenASendFails(): void {
+		$endpoint = 'https://fcm.googleapis.com/fcm/send/secret-device-token';
+		$this->mapper->method('findByUserId')->willReturn([$this->subscription($endpoint)]);
+		$this->network->append(new Response(500, [], 'error for /fcm/send/secret-device-token'));
+
+		$this->assertSame(0, $this->service->pushToUser('sam', [['title' => 'x', 'body' => 'y']]));
+
+		$fingerprint = substr(hash('sha256', $endpoint), 0, 12);
+		$this->assertSame(
+			['warning: Web push delivery failed for push address ' . $fingerprint . ' at fcm.googleapis.com: HTTP 500'],
+			$this->logger->lines,
+		);
+	}
+
+	public function testLogsNoAddressWhenThePushServiceCannotBeReached(): void {
+		$endpoint = 'https://updates.push.services.mozilla.com/wpush/v2/secret-device-token';
+		$this->mapper->method('findByUserId')->willReturn([$this->subscription($endpoint)]);
+		// The HTTP client's own message names the whole address
+		$this->network->append(new ConnectException('Could not reach ' . $endpoint, new Request('POST', $endpoint)));
+
+		$this->service->pushToUser('sam', [['title' => 'x', 'body' => 'y']]);
+
+		$this->assertCount(1, $this->logger->lines);
+		$this->assertStringContainsString('at updates.push.services.mozilla.com: no answer from the push service', $this->logger->lines[0]);
+		$this->assertStringNotContainsString('secret-device-token', $this->logger->lines[0]);
+	}
+
+	public function testDescribesAnAddressWithoutRevealingIt(): void {
+		$endpoint = 'https://web.push.apple.com/QGsecret-device-token';
+		$this->assertSame(
+			'push address ' . substr(hash('sha256', $endpoint), 0, 12) . ' at web.push.apple.com',
+			PushService::describeEndpoint($endpoint),
+		);
+		$this->assertSame('push address ' . substr(hash('sha256', 'not a url'), 0, 12) . ' at an unknown host', PushService::describeEndpoint('not a url'));
 	}
 
 	public function testNothingToSendWithoutSubscriptions(): void {

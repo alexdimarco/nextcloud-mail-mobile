@@ -17,9 +17,15 @@ use OCP\AppFramework\Utility\ITimeFactory;
 use OCP\IURLGenerator;
 use Psr\Log\LoggerInterface;
 use Throwable;
+use function array_keys;
 use function hash;
+use function is_string;
 use function json_encode;
 use function mb_substr;
+use function parse_url;
+use function preg_replace;
+use function str_replace;
+use function substr;
 use function strlen;
 use function usort;
 
@@ -248,11 +254,44 @@ class PushService {
 					}
 					$this->mapper->update($subscription);
 				}
-				$this->logger->warning('Web push delivery failed: ' . $report->getReason());
+				// Not the report's reason: it is the HTTP client's error
+				// message, which contains the whole push address
+				$this->logger->warning('Web push delivery failed for ' . self::describeEndpoint($endpoint) . ': '
+					. ($status !== null ? 'HTTP ' . $status : 'no answer from the push service'));
 			}
 		} catch (Throwable $e) {
-			$this->logger->warning('Web push delivery failed: ' . $e->getMessage(), ['exception' => $e]);
+			// Without the exception itself: its message and trace can carry
+			// push addresses, which would then be written to the log
+			$this->logger->warning('Web push delivery failed: ' . $e::class . ': '
+				. self::redact($e->getMessage(), array_keys($byEndpoint)));
 		}
 		return $delivered;
+	}
+
+	/**
+	 * A push address as it may appear in logs: the push service's host and a
+	 * short fingerprint, for example "push address 3fa2c91b07de at
+	 * fcm.googleapis.com". The address itself lets anyone who has it (and
+	 * this server's key) reach that device, so it never goes into a log. The
+	 * fingerprint is the start of the subscription's endpoint_hash column,
+	 * so an admin can still find the row.
+	 */
+	public static function describeEndpoint(string $endpoint): string {
+		$host = parse_url($endpoint, PHP_URL_HOST);
+		return 'push address ' . substr(hash('sha256', $endpoint), 0, 12)
+			. ' at ' . (is_string($host) && $host !== '' ? $host : 'an unknown host');
+	}
+
+	/**
+	 * Remove push addresses from an error message: the known ones become
+	 * {@see self::describeEndpoint()}, and any other web address is dropped.
+	 *
+	 * @param list<string> $endpoints
+	 */
+	private static function redact(string $text, array $endpoints): string {
+		foreach ($endpoints as $endpoint) {
+			$text = str_replace($endpoint, self::describeEndpoint($endpoint), $text);
+		}
+		return (string)preg_replace('~https?://\S+~i', '[address removed]', $text);
 	}
 }

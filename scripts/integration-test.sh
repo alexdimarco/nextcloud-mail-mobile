@@ -219,6 +219,20 @@ other_token="$(login "$other")"
 [ "$(check_subscribed "$other" "$other_token")" = "False" ] || fail "the subscription outlived signing out"
 echo "ok: removed at sign-out"
 
+step "Turning notifications off sends the push address in the body"
+off_endpoint="https://fcm.googleapis.com/fcm/send/it-off-$$"
+status="$(curl -s -o /dev/null -w '%{http_code}' -c "$other" -b "$other" -H "requesttoken: $other_token" -H 'Content-Type: application/json' \
+	-d "{\"endpoint\":\"$off_endpoint\",\"p256dh\":\"x\",\"auth\":\"y\"}" "$base/index.php/apps/mail_mobile/push")"
+[ "$status" = "200" ] || fail "subscribing answered $status"
+status="$(curl -s -o /dev/null -w '%{http_code}' -X DELETE -c "$other" -b "$other" -H "requesttoken: $other_token" -H 'Content-Type: application/json' \
+	-d "{\"endpoint\":\"$off_endpoint\"}" "$base/index.php/apps/mail_mobile/push")"
+[ "$status" = "200" ] || fail "turning notifications off answered $status"
+still="$(curl -fsS -c "$other" -b "$other" -H "requesttoken: $other_token" -H 'Content-Type: application/json' \
+	-d "{\"endpoint\":\"$off_endpoint\"}" "$base/index.php/apps/mail_mobile/push/check" \
+	| python3 -c 'import json,sys; print(json.load(sys.stdin)["subscribed"])')"
+[ "$still" = "False" ] || fail "the subscription is still there after turning notifications off"
+echo "ok: removed, address sent in the body"
+
 step "The admin settings page asks for a push contact address"
 curl -fsS -c "$other" -b "$other" "$base/index.php/settings/admin/additional" | grep -q 'mail-mobile-admin' \
 	|| fail "no Mail Mobile section in the admin settings"
@@ -297,7 +311,12 @@ if [ -n "$problems" ]; then
 	echo "$problems" | tail -n 5 >&2
 	fail "warnings or errors from Mail Mobile in the log"
 fi
-echo "ok"
+# No push address in any log: neither the web server's access log (where
+# a push address in a web address would land, URL-encoded) nor Nextcloud's
+leaks="$({ docker logs "$name" 2>&1; docker exec "$name" sh -c 'cat /var/www/html/data/nextcloud.log 2>/dev/null || true'; } \
+	| grep -ciE 'fcm(/|%2f)send' || true)"
+[ "$leaks" = "0" ] || fail "a push address was written to a log ($leaks lines)"
+echo "ok: no warnings from Mail Mobile, no push address in any log"
 
 step "With Mail turned off, the page says Mail is needed"
 occ app:disable mail

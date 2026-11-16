@@ -38,8 +38,16 @@ export async function savePushPreferences(showDetails) {
 	await axios.put(generateUrl('/apps/mail_mobile/push/preferences'), { showDetails })
 }
 
+/**
+ * Turn notifications off for this browser.
+ *
+ * The push address goes in the request body, never in the web address:
+ * web servers and proxies write addresses into their access logs.
+ *
+ * @param {string} endpoint the browser's push address
+ */
 export async function deletePushSubscription(endpoint) {
-	await axios.delete(generateUrl('/apps/mail_mobile/push'), { params: { endpoint } })
+	await axios.delete(generateUrl('/apps/mail_mobile/push'), { data: { endpoint } })
 }
 
 export async function sendTestPush() {
