@@ -1,8 +1,11 @@
 # SPDX-FileCopyrightText: 2026 Alex DiMarco
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
-# On a version tag (for example v0.1.0): run every check, then build the
-# app and attach the tarball to a GitHub release. The tarball is not signed; signing for the
+# On a version tag (for example v0.2.0): run every check, then build the
+# app and attach the tarball to a GitHub release. The checks skip building
+# Mail 6 from source (see ci.yml), and every install here runs with
+# install scripts and Composer plugins off, so a release run builds and
+# packages only this app. The tarball is not signed; signing for the
 # Nextcloud app store needs the app's private key, which never goes into
 # this repository or its CI.
 
@@ -50,9 +53,9 @@ jobs:
             echo "Replace OWNER in appinfo/info.xml with the real repository address first" >&2
             exit 1
           fi
-      - run: composer install --no-interaction --no-progress
+      - run: composer install --no-interaction --no-progress --no-plugins --no-scripts
       - run: composer scope
-      - run: npm ci
+      - run: npm ci --ignore-scripts
       - run: npm run build
       - run: scripts/build-release.sh
       - uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3

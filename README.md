@@ -72,10 +72,13 @@ changed between Mail 5.13 and that build; Mail 6 only adds things.
 You need Node 24, PHP 8.2 or newer and Composer.
 
 ```sh
-npm ci && npm run build            # the phone page, into js/
-composer install && composer scope # the web push library, into vendor-scoped/
-scripts/build-release.sh           # puts it all in build/mail_mobile/
+npm ci --ignore-scripts && npm run build                         # the phone page, into js/
+composer install --no-plugins --no-scripts && composer scope    # the web push library, into vendor-scoped/
+scripts/build-release.sh                                         # puts it all in build/mail_mobile/
 ```
+
+`--ignore-scripts`, `--no-plugins` and `--no-scripts` stop the packages'
+own install scripts from running; this app does not need them.
 
 Then copy `build/mail_mobile` into `custom_apps` and enable it as above.
 
@@ -200,12 +203,12 @@ again on their phones.
 ## For developers
 
 ```sh
-npm ci
+npm ci --ignore-scripts
 npm test                 # front-end unit tests (vitest)
 npm run lint             # eslint
 npm run build            # production build into js/
 
-composer install
+composer install --no-plugins --no-scripts
 composer scope           # rename the web push library into vendor-scoped/
 composer test:unit       # PHP unit tests
 composer psalm           # static analysis
