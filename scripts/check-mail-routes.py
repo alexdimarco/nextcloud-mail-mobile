@@ -13,6 +13,12 @@ attachment upload, sending through the outbox, moving, deleting. Then it
 turns notifications on and lets one new message arrive, so the caller
 can check that Mail Mobile queued a notification for it.
 
+It changes the server it talks to: it re-points the account's archive,
+sent and trash folders, creates folders, sends and deletes mail and turns
+on a notification address. So it refuses any server that is not on this
+machine (localhost, 127.0.0.1 or ::1), where the integration test runs
+its throwaway Nextcloud.
+
 Only the Python standard library is used. The Nextcloud password comes
 from the environment (NC_PASSWORD), not the command line.
 
@@ -37,6 +43,23 @@ import urllib.request
 import uuid
 from email.message import EmailMessage
 from email.utils import formatdate, make_msgid
+
+
+LOCAL_HOSTS = {'localhost', '127.0.0.1', '::1'}
+
+
+def refuse_unless_local(base):
+    """Stop before any request unless the server is on this machine."""
+    try:
+        parts = urllib.parse.urlsplit(base)
+        scheme, host = parts.scheme, parts.hostname
+    except ValueError:
+        scheme, host = '', None
+    if scheme not in ('http', 'https') or host not in LOCAL_HOSTS:
+        print(f'Refusing to run against {base!r}: this check changes mail and settings on the '
+              f'server, so it only runs against a throwaway Nextcloud on this machine '
+              f'(localhost, 127.0.0.1 or ::1).', file=sys.stderr)
+        sys.exit(2)
 
 
 def fail(message):
@@ -182,6 +205,7 @@ def main():
     parser.add_argument('--imap-port', type=int, required=True)
     parser.add_argument('--mail-version', required=True)
     args = parser.parse_args()
+    refuse_unless_local(args.base)
     password = os.environ.get('NC_PASSWORD') or fail('NC_PASSWORD is not set')
     run = uuid.uuid4().hex[:8]
     mail = '/index.php/apps/mail'

@@ -234,6 +234,18 @@ for path in "api/accounts" "api/autoComplete?term=sa"; do
 done
 echo "ok: accounts and address search answer"
 
+step "The Mail address checker refuses a server that is not this machine"
+# It changes mail and settings, so it must never run against a real server
+set +e
+refused="$(NC_PASSWORD=unused python3 -I "$root/scripts/check-mail-routes.py" \
+	--base https://cloud.example.org --user admin --mail-user "$MAIL_USER" --mail-password "$MAIL_PASS" \
+	--imap-port "$IMAP_PORT" --mail-version "$MAIL_VERSION" 2>&1)"
+code=$?
+set -e
+[ "$code" = "2" ] && echo "$refused" | grep -q 'Refusing to run against' \
+	|| { echo "$refused" >&2; fail "check-mail-routes.py did not refuse a remote server (exit $code)"; }
+echo "ok: refused (exit 2)"
+
 step "Every Mail address the phone page calls works with a real mail account"
 for _ in $(seq 1 60); do
 	if python3 -c 'import imaplib, ssl, sys; imaplib.IMAP4_SSL("127.0.0.1", int(sys.argv[1]), ssl_context=ssl._create_unverified_context()).logout()' "$IMAP_PORT" 2>/dev/null; then
