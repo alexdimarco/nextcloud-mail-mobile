@@ -65,8 +65,12 @@ class PushControllerTest extends TestCase {
 		// subscribing at once: Nextcloud logs the uncaught error with its
 		// trace, and the trace must not carry what the phone sent
 		$mapper = $this->createMock(PushSubscriptionMapper::class);
-		$mapper->method('findByEndpointHash')->willThrowException(new RuntimeException('unique index violated'));
-		$mapper->method('deleteByEndpointHash')->willThrowException(new RuntimeException('database error'));
+		// Made when the call happens, so the trace runs through this app
+		$fail = static function (): never {
+			throw new RuntimeException('database error');
+		};
+		$mapper->method('findByEndpointHash')->willReturnCallback($fail);
+		$mapper->method('deleteByEndpointHash')->willReturnCallback($fail);
 		$service = new PushService(
 			$mapper,
 			$this->vapidKeys,

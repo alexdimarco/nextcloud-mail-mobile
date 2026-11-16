@@ -61,7 +61,10 @@ class ThrowingWebPushFactory extends WebPushFactory {
 	public function create(array $vapid): WebPush {
 		$message = $this->message;
 		return new class(['VAPID' => $vapid], $message) extends WebPush {
-			public function __construct(array $auth, private string $failure) {
+			public function __construct(
+				array $auth,
+				private string $failure,
+			) {
 				parent::__construct($auth);
 			}
 
@@ -143,6 +146,13 @@ class PushServiceTest extends TestCase {
 			$this->createMock(ITimeFactory::class),
 			$this->logger,
 		);
+	}
+
+	/**
+	 * Thrown from inside the mocked call, so the trace starts there
+	 */
+	public static function databaseError(): never {
+		throw new RuntimeException('database error');
 	}
 
 	/**
@@ -352,9 +362,10 @@ class PushServiceTest extends TestCase {
 
 	public function testErrorTracesNeverHoldTheAddressOrTheBrowserKeys(): void {
 		// For example the database is gone, or two tabs subscribe at once
-		// and the second insert breaks the unique index
-		$this->mapper->method('findByEndpointHash')->willThrowException(new RuntimeException('database error'));
-		$this->mapper->method('deleteByEndpointHash')->willThrowException(new RuntimeException('database error'));
+		// and the second insert breaks the unique index. The error is made
+		// when the call happens, so its trace runs through this app's code.
+		$this->mapper->method('findByEndpointHash')->willReturnCallback(self::databaseError(...));
+		$this->mapper->method('deleteByEndpointHash')->willReturnCallback(self::databaseError(...));
 		$endpoint = 'https://fcm.googleapis.com/fcm/send/secret-device-token';
 
 		$traces = [
@@ -374,7 +385,7 @@ class PushServiceTest extends TestCase {
 	}
 
 	public function testErrorTracesNeverHoldTheNotificationText(): void {
-		$this->mapper->method('findByUserId')->willThrowException(new RuntimeException('database error'));
+		$this->mapper->method('findByUserId')->willReturnCallback(self::databaseError(...));
 
 		$trace = $this->loggedTraceOf(fn () => $this->service->pushToUser('sam', [['title' => 'Sam Carter <sam@example.com>', 'body' => 'Lunch on Friday?']]));
 
