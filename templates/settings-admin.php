@@ -1,7 +1,7 @@
 <?php
 /**
  * SPDX-FileCopyrightText: 2026 Alex DiMarco
- * SPDX-License-Identifier: AGPL-3.0-only
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
 /** @var array{configured: string, effective: ?string, keysState: string, saveUrl: string, invalid: bool, requesttoken: string} $_ */

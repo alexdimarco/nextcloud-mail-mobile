@@ -2,7 +2,7 @@
 	"name": "mail-mobile/mail_mobile",
 	"description": "A phone-friendly web app for Nextcloud Mail, with home-screen install and push notifications",
 	"type": "project",
-	"license": "AGPL-3.0-only",
+	"license": "AGPL-3.0-or-later",
 	"config": {
 		"platform": {
 			"php": "8.2.0"

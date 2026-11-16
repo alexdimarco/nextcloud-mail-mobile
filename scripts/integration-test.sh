@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-FileCopyrightText: 2026 Alex DiMarco
-# SPDX-License-Identifier: AGPL-3.0-only
+# SPDX-License-Identifier: AGPL-3.0-or-later
 #
 # Starts a throwaway Nextcloud with the Mail app in Docker, installs the
 # built Mail Mobile app, and checks that it works:

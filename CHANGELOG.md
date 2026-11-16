@@ -1,6 +1,6 @@
 <!--
   - SPDX-FileCopyrightText: 2026 Alex DiMarco
-  - SPDX-License-Identifier: AGPL-3.0-only
+  - SPDX-License-Identifier: AGPL-3.0-or-later
 -->
 # Changelog
 
@@ -32,3 +32,5 @@ First version as a separate app beside the official Nextcloud Mail app.
   shown as text only.
 - Never sends unsigned mail from an address with an S/MIME certificate
   without asking first.
+- One licence for every file: AGPL-3.0-or-later (version 3 or any later
+  version), except the icons (Apache-2.0).

@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "description": "A phone-friendly web app for Nextcloud Mail",
-  "license": "AGPL-3.0-only",
+  "license": "AGPL-3.0-or-later",
   "scripts": {
     "build": "webpack --mode production",
     "dev": "webpack --mode development",

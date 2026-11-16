@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 /**
  * SPDX-FileCopyrightText: 2026 Alex DiMarco
- * SPDX-License-Identifier: AGPL-3.0-only
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
 // OCP\Util::addHeader() hands over to this Nextcloud server class.

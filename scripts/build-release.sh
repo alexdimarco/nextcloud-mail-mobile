@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-FileCopyrightText: 2026 Alex DiMarco
-# SPDX-License-Identifier: AGPL-3.0-only
+# SPDX-License-Identifier: AGPL-3.0-or-later
 #
 # Puts together the installable app in build/mail_mobile/ and the tarball
 # build/mail_mobile-<version>.tar.gz (the file the app store takes).

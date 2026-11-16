@@ -1,6 +1,6 @@
 <!--
   - SPDX-FileCopyrightText: 2026 Alex DiMarco
-  - SPDX-License-Identifier: AGPL-3.0-only
+  - SPDX-License-Identifier: AGPL-3.0-or-later
 -->
 # Mail Mobile
 
@@ -237,15 +237,14 @@ if they pass, builds the release tarball (`.github/workflows/release.yml`).
 
 ## Licence
 
-GNU Affero General Public License, version 3 (AGPL-3.0). See [LICENSE](LICENSE).
+GNU Affero General Public License, version 3 or (at your option) any later
+version (AGPL-3.0-or-later). See [LICENSE](LICENSE).
 
+- Every file is under that licence, except the app icons, which are based
+  on Google's Material icons (Apache-2.0); see `REUSE.toml`.
 - Files that started in Nextcloud Mail, or were adapted from it, keep
-  Nextcloud's copyright line and say "AGPL-3.0-or-later" (version 3 or any
-  later version), as Mail's own files do.
-- Files written new for this app say "AGPL-3.0-only".
-- Each file's first lines say which applies; the licence texts are in
-  `LICENSES/`. The app icons are based on Google's Material icons
-  (Apache-2.0); see `REUSE.toml`.
+  Nextcloud's copyright line next to Alex DiMarco's.
+- Each file's first lines say this; the licence texts are in `LICENSES/`.
 
 Because of the AGPL, if you run a changed copy for other people, you must
 offer them its source code. The phone page and the settings page link to

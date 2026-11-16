@@ -1,5 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Alex DiMarco
-# SPDX-License-Identifier: AGPL-3.0-only
+# SPDX-License-Identifier: AGPL-3.0-or-later
 version = 1
 SPDX-PackageName = "mail_mobile"
 SPDX-PackageSupplier = "Alex DiMarco"
@@ -8,7 +8,7 @@ SPDX-PackageSupplier = "Alex DiMarco"
 path = ["package.json", "package-lock.json", "composer.json", "composer.lock", ".nvmrc"]
 precedence = "aggregate"
 SPDX-FileCopyrightText = "2026 Alex DiMarco"
-SPDX-License-Identifier = "AGPL-3.0-only"
+SPDX-License-Identifier = "AGPL-3.0-or-later"
 
 [[annotations]]
 path = ["img/icon-192.png", "img/icon-512.png", "img/touch-icon.png"]
