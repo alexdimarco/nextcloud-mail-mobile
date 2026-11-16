@@ -34,7 +34,10 @@ Works with Mail 6 as well as Mail 5.13.
   "&#39;". They were escaped twice; they are still shown only as text.
 - The push address is no longer sent in a web address when notifications
   are turned off, and failed sends log only a short fingerprint of it, the
-  push service's name and the HTTP status.
+  push service's name and the HTTP status. Push addresses, browser keys,
+  the server's push key and notification text are marked sensitive, so
+  PHP leaves them out of error traces; the log lines that could carry them
+  in a trace no longer attach the error itself.
 - Release runs build and package only this app: building Mail from source
   happens only for pull requests and pushes, and every package install in
   CI runs with install scripts and Composer plugins off.

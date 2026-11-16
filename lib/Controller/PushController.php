@@ -65,7 +65,7 @@ class PushController extends Controller {
 
 	#[NoAdminRequired]
 	#[UserRateLimit(limit: 30, period: 3600)]
-	public function subscribe(string $endpoint, string $p256dh, string $auth): JSONResponse {
+	public function subscribe(#[\SensitiveParameter] string $endpoint, #[\SensitiveParameter] string $p256dh, #[\SensitiveParameter] string $auth): JSONResponse {
 		if ($this->userId === null) {
 			return new JSONResponse([], Http::STATUS_UNAUTHORIZED);
 		}
@@ -90,7 +90,7 @@ class PushController extends Controller {
 	 */
 	#[NoAdminRequired]
 	#[UserRateLimit(limit: 120, period: 3600)]
-	public function check(string $endpoint): JSONResponse {
+	public function check(#[\SensitiveParameter] string $endpoint): JSONResponse {
 		if ($this->userId === null) {
 			return new JSONResponse([], Http::STATUS_UNAUTHORIZED);
 		}
@@ -100,7 +100,7 @@ class PushController extends Controller {
 	}
 
 	#[NoAdminRequired]
-	public function unsubscribe(string $endpoint): JSONResponse {
+	public function unsubscribe(#[\SensitiveParameter] string $endpoint): JSONResponse {
 		if ($this->userId === null) {
 			return new JSONResponse([], Http::STATUS_UNAUTHORIZED);
 		}

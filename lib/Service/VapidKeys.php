@@ -104,7 +104,7 @@ class VapidKeys {
 		return $this->appConfig->getValueString(Application::APP_ID, self::CONFIG_PRIVATE, '', lazy: true);
 	}
 
-	private function decrypt(string $stored): ?string {
+	private function decrypt(#[\SensitiveParameter] string $stored): ?string {
 		if ($stored === '') {
 			return null;
 		}
@@ -112,7 +112,9 @@ class VapidKeys {
 			$private = $this->crypto->decrypt($stored);
 			return $private !== '' ? $private : null;
 		} catch (Throwable $e) {
-			$this->logger->error('Could not decrypt the web push private key. Notifications are off until an admin runs: occ mail_mobile:vapid:reset', ['exception' => $e]);
+			// Without the exception itself: its trace would hold the stored
+			// (encrypted) private key
+			$this->logger->error('Could not decrypt the web push private key (' . $e::class . ': ' . $e->getMessage() . '). Notifications are off until an admin runs: occ mail_mobile:vapid:reset');
 			return null;
 		}
 	}

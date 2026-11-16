@@ -42,7 +42,7 @@ final class EndpointPolicy {
 		'.push.apple.com',
 	];
 
-	public static function isAllowed(string $endpoint): bool {
+	public static function isAllowed(#[\SensitiveParameter] string $endpoint): bool {
 		if ($endpoint === '' || strlen($endpoint) > self::MAX_LENGTH) {
 			return false;
 		}

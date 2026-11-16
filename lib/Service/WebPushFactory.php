@@ -22,7 +22,7 @@ class WebPushFactory {
 	/**
 	 * @param array{subject: string, publicKey: string, privateKey: string} $vapid
 	 */
-	public function create(array $vapid): WebPush {
+	public function create(#[\SensitiveParameter] array $vapid): WebPush {
 		return new WebPush(['VAPID' => $vapid], [], self::TIMEOUT, $this->clientOptions());
 	}
 

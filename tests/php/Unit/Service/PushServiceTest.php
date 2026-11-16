@@ -15,19 +15,23 @@ use OCA\MailMobile\Service\PushService;
 use OCA\MailMobile\Service\PushSubject;
 use OCA\MailMobile\Service\VapidKeys;
 use OCA\MailMobile\Service\WebPushFactory;
+use OCA\MailMobile\Tests\Unit\LoggedTrace;
 use OCA\MailMobile\Vendor\GuzzleHttp\Exception\ConnectException;
 use OCA\MailMobile\Vendor\GuzzleHttp\Handler\MockHandler;
 use OCA\MailMobile\Vendor\GuzzleHttp\HandlerStack;
 use OCA\MailMobile\Vendor\GuzzleHttp\Psr7\Request;
 use OCA\MailMobile\Vendor\GuzzleHttp\Psr7\Response;
 use OCA\MailMobile\Vendor\Minishlink\WebPush\VAPID;
+use OCA\MailMobile\Vendor\Minishlink\WebPush\WebPush;
 use OCP\AppFramework\Utility\ITimeFactory;
 use OCP\IURLGenerator;
 use PHPUnit\Framework\MockObject\MockObject;
 use PHPUnit\Framework\TestCase;
 use Psr\Log\LoggerInterface;
 use Psr\Log\LoggerTrait;
+use RuntimeException;
 use Stringable;
+use Throwable;
 
 /**
  * Sends to a fake network: every request the web push library makes is
@@ -45,8 +49,33 @@ class FakeNetworkWebPushFactory extends WebPushFactory {
 }
 
 /**
- * Keeps every log line, with the messages of any exceptions passed along,
- * so a test can check what would have been written to the log.
+ * Sending fails part-way with an error whose message names push addresses
+ * (for example a network error naming the address and a proxy)
+ */
+class ThrowingWebPushFactory extends WebPushFactory {
+	public function __construct(
+		private string $message,
+	) {
+	}
+
+	public function create(array $vapid): WebPush {
+		$message = $this->message;
+		return new class(['VAPID' => $vapid], $message) extends WebPush {
+			public function __construct(array $auth, private string $failure) {
+				parent::__construct($auth);
+			}
+
+			public function flush(?int $batchSize = null): \Generator {
+				throw new RuntimeException($this->failure);
+				yield;
+			}
+		};
+	}
+}
+
+/**
+ * Keeps every log line, with any exception passed along written out as
+ * Nextcloud's log writes it, so a test sees what would reach the log.
  */
 class RecordingLogger implements LoggerInterface {
 	use LoggerTrait;
@@ -57,8 +86,8 @@ class RecordingLogger implements LoggerInterface {
 	public function log($level, string|Stringable $message, array $context = []): void {
 		$line = $level . ': ' . $message;
 		foreach ($context as $value) {
-			if ($value instanceof \Throwable) {
-				$line .= ' | ' . $value->getMessage() . ' | ' . $value->getTraceAsString();
+			if ($value instanceof Throwable) {
+				$line .= ' | ' . LoggedTrace::text($value);
 			}
 		}
 		$this->lines[] = $line;
@@ -71,8 +100,10 @@ class PushServiceTest extends TestCase {
 	private VapidKeys&MockObject $vapidKeys;
 	private MockHandler $network;
 	private PushService $service;
+	private string $ignoreArgs;
 
 	protected function setUp(): void {
+		$this->ignoreArgs = LoggedTrace::keepArguments();
 		$this->mapper = $this->createMock(PushSubscriptionMapper::class);
 		$this->vapidKeys = $this->createMock(VapidKeys::class);
 		$this->vapidKeys->method('getKeyPair')->willReturn(VAPID::createVapidKeys());
@@ -94,6 +125,36 @@ class PushServiceTest extends TestCase {
 			$time,
 			$this->logger,
 		);
+	}
+
+	protected function tearDown(): void {
+		LoggedTrace::restore($this->ignoreArgs);
+	}
+
+	private function serviceWith(VapidKeys $keys, WebPushFactory $factory): PushService {
+		$subject = $this->createMock(PushSubject::class);
+		$subject->method('get')->willReturn('mailto:admin@example.com');
+		return new PushService(
+			$this->mapper,
+			$keys,
+			$factory,
+			$subject,
+			$this->createMock(IURLGenerator::class),
+			$this->createMock(ITimeFactory::class),
+			$this->logger,
+		);
+	}
+
+	/**
+	 * The trace of what $call throws, as Nextcloud would log it
+	 */
+	private function loggedTraceOf(callable $call): string {
+		try {
+			$call();
+		} catch (Throwable $e) {
+			return LoggedTrace::text($e);
+		}
+		$this->fail('expected an error');
 	}
 
 	/**
@@ -287,6 +348,67 @@ class PushServiceTest extends TestCase {
 		$this->assertCount(1, $this->logger->lines);
 		$this->assertStringContainsString('at updates.push.services.mozilla.com: no answer from the push service', $this->logger->lines[0]);
 		$this->assertStringNotContainsString('secret-device-token', $this->logger->lines[0]);
+	}
+
+	public function testErrorTracesNeverHoldTheAddressOrTheBrowserKeys(): void {
+		// For example the database is gone, or two tabs subscribe at once
+		// and the second insert breaks the unique index
+		$this->mapper->method('findByEndpointHash')->willThrowException(new RuntimeException('database error'));
+		$this->mapper->method('deleteByEndpointHash')->willThrowException(new RuntimeException('database error'));
+		$endpoint = 'https://fcm.googleapis.com/fcm/send/secret-device-token';
+
+		$traces = [
+			$this->loggedTraceOf(fn () => $this->service->subscribe('sam', $endpoint, 'BSecretP256dhKey', 'secretAuthValue')),
+			$this->loggedTraceOf(fn () => $this->service->isSubscribed('sam', $endpoint, 55)),
+			$this->loggedTraceOf(fn () => $this->service->unsubscribe('sam', $endpoint)),
+		];
+
+		foreach ($traces as $trace) {
+			$this->assertStringNotContainsString('secret-device-token', $trace);
+			$this->assertStringNotContainsString('BSecretP256dhKey', $trace);
+			$this->assertStringNotContainsString('secretAuthValue', $trace);
+			// Arguments are kept in this trace, and replaced by PHP
+			$this->assertStringContainsString('SensitiveParameterValue', $trace);
+			$this->assertStringContainsString('"sam"', $trace);
+		}
+	}
+
+	public function testErrorTracesNeverHoldTheNotificationText(): void {
+		$this->mapper->method('findByUserId')->willThrowException(new RuntimeException('database error'));
+
+		$trace = $this->loggedTraceOf(fn () => $this->service->pushToUser('sam', [['title' => 'Sam Carter <sam@example.com>', 'body' => 'Lunch on Friday?']]));
+
+		$this->assertStringNotContainsString('Lunch on Friday?', $trace);
+		$this->assertStringNotContainsString('sam@example.com', $trace);
+		$this->assertStringContainsString('SensitiveParameterValue', $trace);
+	}
+
+	public function testASetupErrorLogsNoPrivateKey(): void {
+		$keys = $this->createMock(VapidKeys::class);
+		$valid = VAPID::createVapidKeys();
+		// Not a valid key, so the web push library refuses it
+		$keys->method('getKeyPair')->willReturn(['publicKey' => $valid['publicKey'], 'privateKey' => 'secretPrivateKeyValue']);
+		$this->mapper->method('findByUserId')->willReturn([$this->subscription('https://fcm.googleapis.com/fcm/send/abc')]);
+
+		$sent = $this->serviceWith($keys, new FakeNetworkWebPushFactory($this->network))->pushToUser('sam', [['title' => 'x', 'body' => 'y']]);
+
+		$this->assertSame(0, $sent);
+		$this->assertCount(1, $this->logger->lines);
+		$this->assertStringStartsWith('error: Could not set up web push: ', $this->logger->lines[0]);
+		$this->assertStringNotContainsString('secretPrivateKeyValue', $this->logger->lines[0]);
+	}
+
+	public function testAnErrorWhileSendingIsLoggedWithoutAnyAddress(): void {
+		$endpoint = 'https://fcm.googleapis.com/fcm/send/secret-device-token';
+		$this->mapper->method('findByUserId')->willReturn([$this->subscription($endpoint)]);
+		$factory = new ThrowingWebPushFactory('cURL error 28 for ' . $endpoint . ' through https://proxy.internal.example/route');
+
+		$this->assertSame(0, $this->serviceWith($this->vapidKeys, $factory)->pushToUser('sam', [['title' => 'x', 'body' => 'y']]));
+
+		$this->assertSame(
+			['warning: Web push delivery failed: RuntimeException: cURL error 28 for ' . PushService::describeEndpoint($endpoint) . ' through [address removed]'],
+			$this->logger->lines,
+		);
 	}
 
 	public function testDescribesAnAddressWithoutRevealingIt(): void {

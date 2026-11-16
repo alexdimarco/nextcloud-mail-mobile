@@ -249,10 +249,12 @@ done
 echo "ok: accounts and address search answer"
 
 step "The Mail address checker refuses a server that is not this machine"
-# It changes mail and settings, so it must never run against a real server
+# It changes mail and settings, so it must never run against a real server.
+# The target is a .invalid name, which never resolves (RFC 6761): even if
+# the guard broke, this check could not reach a real host.
 set +e
 refused="$(NC_PASSWORD=unused python3 -I "$root/scripts/check-mail-routes.py" \
-	--base https://cloud.example.org --user admin --mail-user "$MAIL_USER" --mail-password "$MAIL_PASS" \
+	--base https://cloud.example.invalid --user admin --mail-user "$MAIL_USER" --mail-password "$MAIL_PASS" \
 	--imap-port "$IMAP_PORT" --mail-version "$MAIL_VERSION" 2>&1)"
 code=$?
 set -e
