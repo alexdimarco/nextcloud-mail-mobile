@@ -13,6 +13,7 @@ use OCA\Mail\Events\NewMessagesSynchronized;
 use OCA\Mail\Service\MailManager;
 use OCP\App\IAppManager;
 use OCP\EventDispatcher\Event;
+use OCP\IL10N;
 use OCP\IUserManager;
 use Psr\Container\ContainerInterface;
 use Psr\Log\LoggerInterface;
@@ -38,10 +39,16 @@ class MailBridge {
 	/** Mail's event for "a sync stored new messages", listened to by class name */
 	public const NEW_MESSAGES_EVENT = NewMessagesSynchronized::class;
 
-	/** Oldest Mail version this app was built and tested against */
+	/**
+	 * Oldest Mail version this app was built and tested against. Tested:
+	 * Mail 5.13.2 and Mail 6.0.0-alpha.3, on Nextcloud 33, 34 and 35.
+	 */
 	public const MIN_MAIL_VERSION = '5.13.0';
 	/** First Mail version this app refuses until it has been tested */
 	public const MAX_MAIL_VERSION_EXCLUSIVE = '7.0.0';
+	/** The same range, as people read it: "version 5.13 to 6.x" */
+	public const MIN_MAIL_LABEL = '5.13';
+	public const MAX_MAIL_LABEL = '6.x';
 
 	/** At most this many message ids are carried into one notification job */
 	public const MAX_MESSAGES = 3;
@@ -90,8 +97,24 @@ class MailBridge {
 	}
 
 	/**
+	 * The plain message shown on the phone page and in personal settings
+	 * when Mail cannot be used, for example "Mail Mobile needs the Mail app,
+	 * version 5.13 to 6.x. This server has: Mail 7.0.0."
+	 *
+	 * @param string $found what was found instead, from {@see MailStatus::$found}
+	 */
+	public static function needsMailMessage(IL10N $l, string $found): string {
+		return $l->t('Mail Mobile needs the Mail app, version %1$s to %2$s. This server has: %3$s.', [
+			self::MIN_MAIL_LABEL,
+			self::MAX_MAIL_LABEL,
+			$found,
+		]);
+	}
+
+	/**
 	 * Pre-releases count as the release they lead to, so a 5.13 release
-	 * candidate is accepted and a 7.0 beta is refused like 7.0 itself.
+	 * candidate and a 6.0 alpha are accepted, and a 7.0 beta is refused
+	 * like 7.0 itself.
 	 */
 	public static function isSupportedVersion(string $version): bool {
 		$release = (string)preg_replace('/[-+].*$/', '', $version);
@@ -111,7 +134,10 @@ class MailBridge {
 		}
 		try {
 			$mailbox = $event->getMailbox();
-			if (!$mailbox->isSpecialUse('inbox')) {
+			// Mail 6 itself treats a mailbox as the inbox when it is marked
+			// so or is named INBOX (MailboxMapper::findSpecialUseMailbox);
+			// both checks exist in Mail 5.13 too
+			if (!$mailbox->isSpecialUse('inbox') && !$mailbox->isInbox()) {
 				return null;
 			}
 			$messages = $event->getMessages();

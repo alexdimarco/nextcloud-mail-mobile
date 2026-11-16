@@ -136,7 +136,7 @@
 		<div v-if="forwardedHtml" class="composer__forwarded">
 			<span>
 				{{ forwardedFrom
-					? t('mail_mobile', '↪ Forwarded message from {sender} is included below', { sender: forwardedFrom })
+					? t('mail_mobile', '↪ Forwarded message from {sender} is included below', { sender: forwardedFrom }, AS_TEXT)
 					: t('mail_mobile', '↪ Forwarded message is included below') }}
 			</span>
 			<button
@@ -209,6 +209,7 @@
 
 <script>
 import { autocomplete, sendMessage, uploadAttachment } from '../api/mail.js'
+import { AS_TEXT } from '../l10nText.js'
 import logger from '../logger.js'
 import { store } from '../store.js'
 
@@ -298,6 +299,7 @@ export default {
 			// send this message unsigned anyway
 			unsignedOk: false,
 			notice: null,
+			AS_TEXT,
 			suggestions: [],
 			suggestField: 'to',
 			suggestTimer: null,
@@ -491,7 +493,7 @@ export default {
 					this.notice = this.t('mail_mobile', '{name} is too large to send by email (limit {limit} MB in total)', {
 						name: file.name,
 						limit: Math.round(MAX_TOTAL_BYTES / 1024 / 1024),
-					})
+					}, AS_TEXT)
 					continue
 				}
 				const entry = {
@@ -508,7 +510,7 @@ export default {
 				} catch (error) {
 					logger.error('attachment upload failed', error)
 					this.attachments = this.attachments.filter((a) => a !== entry)
-					this.notice = this.t('mail_mobile', 'Could not upload {name}', { name: file.name })
+					this.notice = this.t('mail_mobile', 'Could not upload {name}', { name: file.name }, AS_TEXT)
 				}
 			}
 		},

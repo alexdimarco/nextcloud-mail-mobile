@@ -5,6 +5,13 @@
 # workflow runs them too, before it builds. Runs on GitHub's own runners,
 # which are free for public repositories. Every action is pinned to a
 # commit, with its version in a comment (Dependabot keeps them current).
+#
+# Our own packages are installed with their install scripts and Composer
+# plugins turned off (npm ci --ignore-scripts, composer --no-plugins
+# --no-scripts): installing them runs no third-party code. The one
+# exception is building Mail 6 from source (mail-build), which runs Mail's
+# own install steps; it runs for pushes and pull requests only, never for
+# a release tag.
 
 name: CI
 
@@ -38,7 +45,7 @@ jobs:
           extensions: gmp, bcmath, openssl
           tools: composer:v2
           coverage: none
-      - run: composer install --no-interaction --no-progress
+      - run: composer install --no-interaction --no-progress --no-plugins --no-scripts
       - run: composer scope
       - name: Syntax check
         run: find lib appinfo templates tests/php scripts -name '*.php' -print0 | xargs -0 -n1 php -l
@@ -66,7 +73,7 @@ jobs:
           extensions: gmp, bcmath, openssl
           tools: composer:v2
           coverage: none
-      - run: composer install --no-interaction --no-progress
+      - run: composer install --no-interaction --no-progress --no-plugins --no-scripts
       - run: composer scope
       - run: composer test:unit
 
@@ -82,7 +89,7 @@ jobs:
         with:
           node-version-file: .nvmrc
           cache: npm
-      - run: npm ci
+      - run: npm ci --ignore-scripts
       - run: npm run lint
       - run: npm test
       - run: npm run build
@@ -132,9 +139,9 @@ jobs:
         with:
           node-version-file: .nvmrc
           cache: npm
-      - run: composer install --no-interaction --no-progress
+      - run: composer install --no-interaction --no-progress --no-plugins --no-scripts
       - run: composer scope
-      - run: npm ci
+      - run: npm ci --ignore-scripts
       - run: npm run build
       - run: scripts/build-release.sh
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -143,6 +150,7 @@ jobs:
           path: build/mail_mobile-*.tar.gz
           retention-days: 7
 
+  # Released Mail versions: downloaded and checked against a recorded checksum
   integration:
     name: Nextcloud ${{ matrix.nextcloud }} with Mail ${{ matrix.mail }}
     needs: package
@@ -152,7 +160,6 @@ jobs:
       fail-fast: false
       matrix:
         nextcloud: ['33', '34', '35']
-        # Add Mail 6 here once it is released (see the README)
         mail: ['5.13.2']
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -165,3 +172,62 @@ jobs:
       - name: Unpack the built app
         run: tar -xzf build/mail_mobile-*.tar.gz -C build
       - run: scripts/integration-test.sh "${{ matrix.nextcloud }}" "${{ matrix.mail }}"
+
+  # Mail 6 has no published release yet: build it from Nextcloud's source
+  # at the commit pinned in scripts/build-mail.sh, the way Mail's own
+  # release build does, and test against that
+  mail-build:
+    name: Build Mail 6.0.0-alpha.3 from source
+    # Never on a release: release.yml reuses this file, and a release run
+    # must not run the install scripts of Mail's packages
+    if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # 2.40.0
+        with:
+          php-version: '8.2'
+          extensions: intl, zip, mbstring, gd
+          tools: composer:v2
+          coverage: none
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+      - run: scripts/build-mail.sh 6.0.0-alpha.3 build/mail-6.0.0-alpha.3.tar.gz
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: mail-6.0.0-alpha.3
+          path: build/mail-6.0.0-alpha.3.tar.gz
+          retention-days: 7
+
+  integration-mail6:
+    name: Nextcloud ${{ matrix.nextcloud }} with Mail ${{ matrix.mail }}
+    needs: [package, mail-build]
+    if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        nextcloud: ['33', '34', '35']
+        mail: ['6.0.0-alpha.3']
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: mail_mobile
+          path: build
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: mail-${{ matrix.mail }}
+          path: build
+      - name: Unpack the built app
+        run: tar -xzf build/mail_mobile-*.tar.gz -C build
+      - run: scripts/integration-test.sh "${{ matrix.nextcloud }}" "${{ matrix.mail }}"
+        env:
+          MAIL_TARBALL: build/mail-${{ matrix.mail }}.tar.gz

@@ -65,6 +65,20 @@
 			</template>
 		</div>
 
+		<div
+			v-for="account in accountsToReconnect"
+			:key="'reconnect-' + account.id"
+			class="mob__banner"
+			role="alert">
+			<template v-if="account.isDelegated === true">
+				{{ t('mail_mobile', 'The sign-in for {email} expired and could not be renewed. Someone shared this account with you, so only they can reconnect it, in their full Mail app.', { email: account.emailAddress }, AS_TEXT) }}
+			</template>
+			<template v-else>
+				{{ t('mail_mobile', 'The sign-in for {email} expired and could not be renewed. Open the full Mail app and choose Reconnect.', { email: account.emailAddress }, AS_TEXT) }}
+				<a class="mob__link" :href="fullAppUrl">{{ t('mail_mobile', 'Open the full Mail app') }}</a>
+			</template>
+		</div>
+
 		<div class="mob__panes">
 			<aside
 				v-if="isWide || route.view === 'list' || route.view === 'boxes'"
@@ -134,6 +148,7 @@ import EnvelopeList from './views/EnvelopeList.vue'
 import MailboxPicker from './views/MailboxPicker.vue'
 import Reader from './views/Reader.vue'
 import { signInAgain } from './api/mail.js'
+import { AS_TEXT } from './l10nText.js'
 import { defaultMailbox, findMailbox, loadAccounts, store } from './store.js'
 
 export default {
@@ -141,6 +156,7 @@ export default {
 	components: { EnvelopeList, MailboxPicker, Reader, Composer },
 	data() {
 		return {
+			AS_TEXT,
 			store,
 			route: this.parseHash(),
 			refreshTick: 0,
@@ -162,6 +178,16 @@ export default {
 
 		stale() {
 			return !!store.buildVersion && !!store.version && store.buildVersion !== store.version
+		},
+
+		// Mail 6 marks an account that signs in to the mail server with a
+		// single sign-on token when that token expired and could not be
+		// renewed. Only the full Mail app can reconnect it (its "Reconnect
+		// your mail account" dialog), and only for the account's owner: an
+		// account someone shared with you (Mail's delegation, isDelegated)
+		// uses the owner's sign-in. Mail 5 never sends oauthNeedsReauth.
+		accountsToReconnect() {
+			return store.accounts.filter((account) => account.oauthNeedsReauth === true)
 		},
 
 		title() {

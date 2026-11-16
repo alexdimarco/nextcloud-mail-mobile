@@ -80,7 +80,7 @@
 				· Mail {{ store.mailVersion }}
 			</template>
 			<template v-if="store.buildVersion && store.version && store.buildVersion !== store.version">
-				<br>({{ t('mail_mobile', 'server has {version} — reload to update', { version: store.version }) }})
+				<br>({{ t('mail_mobile', 'server has {version} — reload to update', { version: store.version }, AS_TEXT) }})
 			</template>
 		</p>
 	</div>
@@ -96,6 +96,7 @@ import {
 	savePushSubscription,
 	sendTestPush,
 } from '../api/push.js'
+import { AS_TEXT } from '../l10nText.js'
 import logger from '../logger.js'
 import { store } from '../store.js'
 
@@ -129,6 +130,7 @@ export default {
 	name: 'MailboxPicker',
 	data() {
 		return {
+			AS_TEXT,
 			store,
 			fullAppUrl: generateUrl('/apps/mail/'),
 			showInstallHelp: false,

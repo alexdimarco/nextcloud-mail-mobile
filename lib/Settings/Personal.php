@@ -16,6 +16,7 @@ use OCA\MailMobile\Service\PushService;
 use OCA\MailMobile\Service\SourceLink;
 use OCP\AppFramework\Http\TemplateResponse;
 use OCP\IDateTimeFormatter;
+use OCP\IL10N;
 use OCP\IURLGenerator;
 use OCP\IUserSession;
 use OCP\Settings\ISettings;
@@ -33,6 +34,7 @@ class Personal implements ISettings {
 		private PushService $pushService,
 		private SourceLink $sourceLink,
 		private IDateTimeFormatter $dateFormatter,
+		private IL10N $l,
 	) {
 	}
 
@@ -52,7 +54,7 @@ class Personal implements ISettings {
 		return new TemplateResponse(Application::APP_ID, 'settings-personal', [
 			'url' => $this->urlGenerator->linkToRouteAbsolute('mail_mobile.page.index'),
 			'usable' => $status->usable,
-			'found' => $status->found,
+			'needsMail' => $status->usable ? '' : MailBridge::needsMailMessage($this->l, $status->found),
 			'showDetails' => $userId !== null && $this->preferences->showDetails($userId),
 			'preferencesUrl' => $this->urlGenerator->linkToRoute('mail_mobile.settings.savePreferences'),
 			'devices' => $devices,

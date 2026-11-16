@@ -10,13 +10,19 @@ declare(strict_types=1);
 namespace OCA\MailMobile\Tests\Unit\Controller;
 
 use OCA\MailMobile\Controller\PushController;
+use OCA\MailMobile\Db\PushSubscriptionMapper;
 use OCA\MailMobile\Service\Preferences;
 use OCA\MailMobile\Service\PushService;
+use OCA\MailMobile\Service\PushSubject;
 use OCA\MailMobile\Service\SessionToken;
 use OCA\MailMobile\Service\VapidKeys;
+use OCA\MailMobile\Service\WebPushFactory;
+use OCA\MailMobile\Tests\Unit\LoggedTrace;
 use OCP\AppFramework\Http;
+use OCP\AppFramework\Utility\ITimeFactory;
 use OCP\IL10N;
 use OCP\IRequest;
+use OCP\IURLGenerator;
 use PHPUnit\Framework\MockObject\MockObject;
 use PHPUnit\Framework\TestCase;
 use Psr\Log\NullLogger;
@@ -33,7 +39,7 @@ class PushControllerTest extends TestCase {
 		$this->preferences = $this->createMock(Preferences::class);
 	}
 
-	private function controller(?string $userId = 'sam'): PushController {
+	private function controller(?string $userId = 'sam', ?PushService $pushService = null): PushController {
 		$l = $this->createMock(IL10N::class);
 		$l->method('t')->willReturnArgument(0);
 		$request = $this->createMock(IRequest::class);
@@ -45,13 +51,60 @@ class PushControllerTest extends TestCase {
 		return new PushController(
 			$request,
 			$userId,
-			$this->pushService,
+			$pushService ?? $this->pushService,
 			$this->vapidKeys,
 			$token,
 			$this->preferences,
 			$l,
 			new NullLogger(),
 		);
+	}
+
+	public function testAnErrorTraceNeverHoldsThePushAddressOrKeys(): void {
+		// A real PushService whose database fails, for example two tabs
+		// subscribing at once: Nextcloud logs the uncaught error with its
+		// trace, and the trace must not carry what the phone sent
+		$mapper = $this->createMock(PushSubscriptionMapper::class);
+		// Made when the call happens, so the trace runs through this app
+		$fail = static function (): never {
+			throw new RuntimeException('database error');
+		};
+		$mapper->method('findByEndpointHash')->willReturnCallback($fail);
+		$mapper->method('deleteByEndpointHash')->willReturnCallback($fail);
+		$service = new PushService(
+			$mapper,
+			$this->vapidKeys,
+			new WebPushFactory(),
+			$this->createMock(PushSubject::class),
+			$this->createMock(IURLGenerator::class),
+			$this->createMock(ITimeFactory::class),
+			new NullLogger(),
+		);
+		$controller = $this->controller('sam', $service);
+		$endpoint = 'https://fcm.googleapis.com/fcm/send/secret-device-token';
+		$previous = LoggedTrace::keepArguments();
+		try {
+			$calls = [
+				fn () => $controller->subscribe($endpoint, 'BSecretP256dhKey', 'secretAuthValue'),
+				fn () => $controller->check($endpoint),
+				fn () => $controller->unsubscribe($endpoint),
+			];
+			foreach ($calls as $call) {
+				try {
+					$call();
+					$this->fail('expected the database error');
+				} catch (RuntimeException $e) {
+					$trace = LoggedTrace::text($e);
+				}
+				$this->assertStringNotContainsString('secret-device-token', $trace);
+				$this->assertStringNotContainsString('BSecretP256dhKey', $trace);
+				$this->assertStringNotContainsString('secretAuthValue', $trace);
+				// The arguments are in the trace, replaced by PHP
+				$this->assertStringContainsString('SensitiveParameterValue', $trace);
+			}
+		} finally {
+			LoggedTrace::restore($previous);
+		}
 	}
 
 	public function testHandsOutThePublicKey(): void {

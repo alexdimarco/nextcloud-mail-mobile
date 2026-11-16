@@ -2,8 +2,9 @@
 # SPDX-FileCopyrightText: 2026 Alex DiMarco
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
-# Starts a throwaway Nextcloud with the Mail app in Docker, installs the
-# built Mail Mobile app, and checks that it works:
+# Starts a throwaway Nextcloud with the Mail app in Docker, and a
+# throwaway mail server (Dovecot and Postfix, the image Mail's own tests
+# use), installs the built Mail Mobile app, and checks that it works:
 #   - the app enables
 #   - the phone page answers and loads the current (hashed) bundle
 #   - the home-screen manifest is valid JSON with the right scope
@@ -11,10 +12,18 @@
 #   - the push key route hands out a public key, and occ can reset it
 #   - signing out removes the notification subscriptions of that sign-in
 #   - the personal and admin settings pages show this app's sections
+#   - every Mail web address the phone page calls works against a real
+#     mail account (scripts/check-mail-routes.py), and Mail's own page
+#     loads this app's sign-in return script
+#   - new inbox mail queues a notification job (Mail's event still fires
+#     and this app still reads it)
 #   - with Mail turned off, the page says plainly that Mail is needed
 #
 # Usage: scripts/integration-test.sh [nextcloud-major] [mail-version]
 #   e.g. scripts/integration-test.sh 33 5.13.2
+#        MAIL_TARBALL=build/mail-6.0.0-alpha.3.tar.gz scripts/integration-test.sh 35 6.0.0-alpha.3
+# A Mail version with no published release (Mail 6 pre-releases) is built
+# from source first with scripts/build-mail.sh and passed as MAIL_TARBALL.
 # Needs: Docker, curl, python3, and a finished build (scripts/build-release.sh).
 set -euo pipefail
 
@@ -30,12 +39,25 @@ case "$NC_MAJOR" in
 	*) echo "Unknown Nextcloud version $NC_MAJOR (known: 33, 34, 35)" >&2; exit 2 ;;
 esac
 
-# Mail release tarballs, pinned by checksum
-case "$MAIL_VERSION" in
-	5.13.2) MAIL_SHA256="bad5ec351a265916f7fcb048f1f3ceb3994e2bfd95f23e793f854f6cc12c9e58" ;;
-	*) echo "No checksum recorded for Mail $MAIL_VERSION; add it to this script" >&2; exit 2 ;;
-esac
+# Mail release tarballs, pinned by checksum. Versions without a published
+# release come from scripts/build-mail.sh (MAIL_TARBALL), which pins the
+# source commit instead.
+MAIL_SHA256=""
+if [ -z "${MAIL_TARBALL:-}" ]; then
+	case "$MAIL_VERSION" in
+		5.13.2) MAIL_SHA256="bad5ec351a265916f7fcb048f1f3ceb3994e2bfd95f23e793f854f6cc12c9e58" ;;
+		6.0.0-alpha.3) echo "Mail $MAIL_VERSION has no published release: build it with scripts/build-mail.sh and pass MAIL_TARBALL" >&2; exit 2 ;;
+		*) echo "No checksum recorded for Mail $MAIL_VERSION; add it to this script" >&2; exit 2 ;;
+	esac
+fi
 MAIL_URL="https://github.com/nextcloud-releases/mail/releases/download/v${MAIL_VERSION}/mail-v${MAIL_VERSION}.tar.gz"
+
+# A throwaway mail server: the image Mail's own integration tests use,
+# pinned to the same digest. Its one account is a public test account.
+IMAP_IMAGE="ghcr.io/christophwurst/docker-imap-devel@sha256:b76a062268d7342ccec549f5323a0b6dc1b6ac55b03367f474934927653f5cb5"
+MAIL_USER="user@domain.tld"
+MAIL_PASS="mypassword"
+IMAP_PORT="${IMAP_PORT:-3993}"
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
 app="$root/build/mail_mobile"
@@ -50,7 +72,17 @@ password="$(python3 -c 'import secrets; print(secrets.token_hex(12))')"
 base="http://localhost:$PORT"
 
 cleanup() {
-	docker rm -f "$name" >/dev/null 2>&1 || true
+	status=$?
+	if [ "$status" -ne 0 ]; then
+		# What the server and the mail server said, to see why
+		echo "-- Nextcloud log (last warnings and errors):" >&2
+		docker exec "$name" sh -c 'tail -n 400 /var/www/html/data/nextcloud.log 2>/dev/null' \
+			| grep -E '"level":[2-4],' | tail -n 8 | cut -c1-1500 >&2 || true
+		echo "-- mail server log (last lines):" >&2
+		docker logs --tail 15 "$name-mailserver" >&2 2>&1 || true
+	fi
+	docker rm -f "$name" "$name-mailserver" >/dev/null 2>&1 || true
+	docker network rm "$name-net" >/dev/null 2>&1 || true
 	rm -rf "$work"
 }
 trap cleanup EXIT
@@ -59,13 +91,28 @@ step() { printf '\n== %s\n' "$*"; }
 fail() { echo "FAIL: $*" >&2; exit 1; }
 occ() { docker exec -u www-data "$name" php occ "$@"; }
 
-step "Download Mail $MAIL_VERSION"
-curl -fsSL -o "$work/mail.tar.gz" "$MAIL_URL"
-echo "$MAIL_SHA256  $work/mail.tar.gz" | sha256sum -c - 2>/dev/null \
-	|| echo "$MAIL_SHA256  $work/mail.tar.gz" | shasum -a 256 -c -
+if [ -n "${MAIL_TARBALL:-}" ]; then
+	step "Use Mail $MAIL_VERSION built from source ($MAIL_TARBALL)"
+	cp "$MAIL_TARBALL" "$work/mail.tar.gz"
+else
+	step "Download Mail $MAIL_VERSION"
+	curl -fsSL -o "$work/mail.tar.gz" "$MAIL_URL"
+	echo "$MAIL_SHA256  $work/mail.tar.gz" | sha256sum -c - 2>/dev/null \
+		|| echo "$MAIL_SHA256  $work/mail.tar.gz" | shasum -a 256 -c -
+fi
+found="$(tar -xzOf "$work/mail.tar.gz" mail/appinfo/info.xml | sed -n 's:.*<version>\(.*\)</version>.*:\1:p' | head -n 1)"
+[ "$found" = "$MAIL_VERSION" ] || fail "the Mail tarball is Mail $found, not $MAIL_VERSION"
+echo "ok: Mail $found"
+
+step "Start a throwaway mail server"
+docker network create "$name-net" >/dev/null
+docker run -d --name "$name-mailserver" --network "$name-net" --network-alias mailserver \
+	-p "127.0.0.1:$IMAP_PORT:993" \
+	-e MAILNAME=mail.domain.tld -e MAIL_ADDRESS="$MAIL_USER" -e MAIL_PASS="$MAIL_PASS" \
+	"$IMAP_IMAGE" >/dev/null
 
 step "Start Nextcloud $NC_MAJOR"
-docker run -d --name "$name" -p "127.0.0.1:$PORT:80" \
+docker run -d --name "$name" --network "$name-net" -p "127.0.0.1:$PORT:80" \
 	-e SQLITE_DATABASE=nextcloud \
 	-e NEXTCLOUD_ADMIN_USER=admin \
 	-e NEXTCLOUD_ADMIN_PASSWORD="$password" \
@@ -172,6 +219,20 @@ other_token="$(login "$other")"
 [ "$(check_subscribed "$other" "$other_token")" = "False" ] || fail "the subscription outlived signing out"
 echo "ok: removed at sign-out"
 
+step "Turning notifications off sends the push address in the body"
+off_endpoint="https://fcm.googleapis.com/fcm/send/it-off-$$"
+status="$(curl -s -o /dev/null -w '%{http_code}' -c "$other" -b "$other" -H "requesttoken: $other_token" -H 'Content-Type: application/json' \
+	-d "{\"endpoint\":\"$off_endpoint\",\"p256dh\":\"x\",\"auth\":\"y\"}" "$base/index.php/apps/mail_mobile/push")"
+[ "$status" = "200" ] || fail "subscribing answered $status"
+status="$(curl -s -o /dev/null -w '%{http_code}' -X DELETE -c "$other" -b "$other" -H "requesttoken: $other_token" -H 'Content-Type: application/json' \
+	-d "{\"endpoint\":\"$off_endpoint\"}" "$base/index.php/apps/mail_mobile/push")"
+[ "$status" = "200" ] || fail "turning notifications off answered $status"
+still="$(curl -fsS -c "$other" -b "$other" -H "requesttoken: $other_token" -H 'Content-Type: application/json' \
+	-d "{\"endpoint\":\"$off_endpoint\"}" "$base/index.php/apps/mail_mobile/push/check" \
+	| python3 -c 'import json,sys; print(json.load(sys.stdin)["subscribed"])')"
+[ "$still" = "False" ] || fail "the subscription is still there after turning notifications off"
+echo "ok: removed, address sent in the body"
+
 step "The admin settings page asks for a push contact address"
 curl -fsS -c "$other" -b "$other" "$base/index.php/settings/admin/additional" | grep -q 'mail-mobile-admin' \
 	|| fail "no Mail Mobile section in the admin settings"
@@ -187,6 +248,60 @@ for path in "api/accounts" "api/autoComplete?term=sa"; do
 done
 echo "ok: accounts and address search answer"
 
+step "The Mail address checker refuses a server that is not this machine"
+# It changes mail and settings, so it must never run against a real server.
+# The target is a .invalid name, which never resolves (RFC 6761): even if
+# the guard broke, this check could not reach a real host.
+set +e
+refused="$(NC_PASSWORD=unused python3 -I "$root/scripts/check-mail-routes.py" \
+	--base https://cloud.example.invalid --user admin --mail-user "$MAIL_USER" --mail-password "$MAIL_PASS" \
+	--imap-port "$IMAP_PORT" --mail-version "$MAIL_VERSION" 2>&1)"
+code=$?
+set -e
+[ "$code" = "2" ] && echo "$refused" | grep -q 'Refusing to run against' \
+	|| { echo "$refused" >&2; fail "check-mail-routes.py did not refuse a remote server (exit $code)"; }
+echo "ok: refused (exit 2)"
+
+step "Every Mail address the phone page calls works with a real mail account"
+for _ in $(seq 1 60); do
+	if python3 -c 'import imaplib, ssl, sys; imaplib.IMAP4_SSL("127.0.0.1", int(sys.argv[1]), ssl_context=ssl._create_unverified_context()).logout()' "$IMAP_PORT" 2>/dev/null; then
+		break
+	fi
+	sleep 2
+done
+# Background jobs only from cron, which is not running here: nothing is
+# sent to a push service during the test
+occ background:cron
+# The throwaway mail server has a self-signed certificate (as in Mail's own tests)
+occ config:system:set app.mail.verify-tls-peer --type bool --value false
+occ mail:account:create-imap admin "Test account" "$MAIL_USER" \
+	mailserver 993 ssl "$MAIL_USER" "$MAIL_PASS" \
+	mailserver 25 none "$MAIL_USER" "$MAIL_PASS"
+inbox_id="$(NC_PASSWORD="$password" python3 -I "$root/scripts/check-mail-routes.py" \
+	--base "$base" --user admin --mail-user "$MAIL_USER" --mail-password "$MAIL_PASS" \
+	--imap-port "$IMAP_PORT" --mail-version "$MAIL_VERSION" | tee /dev/stderr | tail -n 1)"
+[ -n "$inbox_id" ] || fail "the Mail address checks did not finish"
+
+step "New inbox mail queued a notification job"
+# Read straight from the database: the job holds only ids
+jobs="$(docker exec -u www-data "$name" php -r '
+	$db = new PDO("sqlite:/var/www/html/data/nextcloud.db");
+	foreach ($db->query("SELECT argument FROM oc_jobs WHERE class = '"'"'OCA\\MailMobile\\BackgroundJob\\PushJob'"'"'") as $row) {
+		echo $row["argument"], "\n";
+	}')"
+echo "$jobs" | python3 -c '
+import json, sys
+inbox = int(sys.argv[1])
+jobs = [json.loads(line) for line in sys.stdin if line.strip()]
+# The message the test sent to itself may arrive in the same sync, so
+# one or more new messages; at most 3 ids are kept, never any content
+match = [j for j in jobs if j.get("userId") == "admin" and j.get("mailboxId") == inbox and j.get("count", 0) >= 1]
+assert match, f"no notification job for the inbox: {jobs}"
+assert set(match[0]) == {"userId", "accountId", "mailboxId", "messageIds", "count"}, match[0]
+assert len(match[0]["messageIds"]) == min(match[0]["count"], 3), match[0]
+print("ok:", match[0])
+' "$inbox_id" || fail "no notification job was queued for the new mail"
+
 step "Nothing went wrong in the server log"
 # Warnings or worse that mention this app, except the rejection above,
 # which this test caused on purpose
@@ -198,7 +313,12 @@ if [ -n "$problems" ]; then
 	echo "$problems" | tail -n 5 >&2
 	fail "warnings or errors from Mail Mobile in the log"
 fi
-echo "ok"
+# No push address in any log: neither the web server's access log (where
+# a push address in a web address would land, URL-encoded) nor Nextcloud's
+leaks="$({ docker logs "$name" 2>&1; docker exec "$name" sh -c 'cat /var/www/html/data/nextcloud.log 2>/dev/null || true'; } \
+	| grep -ciE 'fcm(/|%2f)send' || true)"
+[ "$leaks" = "0" ] || fail "a push address was written to a log ($leaks lines)"
+echo "ok: no warnings from Mail Mobile, no push address in any log"
 
 step "With Mail turned off, the page says Mail is needed"
 occ app:disable mail

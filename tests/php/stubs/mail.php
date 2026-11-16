@@ -9,8 +9,9 @@ declare(strict_types=1);
 
 // Stand-ins for the parts of the Nextcloud Mail app that
 // lib/Mail/MailBridge.php uses, with the same names and method signatures
-// as Mail 5.13 and 6.0 (checked against their source). Used by the unit
-// tests and by Psalm. The real classes come from Mail at run time.
+// as Mail 5.13.2 and Mail 6.0.0-alpha.3 (checked against their source;
+// every method stubbed here is the same in both). Used by the unit tests
+// and by Psalm. The real classes come from Mail at run time.
 
 namespace OCA\Mail {
 	class Account {
@@ -56,6 +57,10 @@ namespace OCA\Mail\Db {
 		}
 
 		public function isSpecialUse(string $specialUse): bool {
+			return false;
+		}
+
+		public function isInbox(): bool {
 			return false;
 		}
 	}

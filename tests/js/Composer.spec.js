@@ -7,6 +7,7 @@
 import { shallowMount } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import Composer from '../../src/views/Composer.vue'
+import { l10nMocks } from './l10n.js'
 
 vi.mock('../../src/api/mail.js', () => ({
 	autocomplete: vi.fn().mockResolvedValue([]),
@@ -37,9 +38,7 @@ describe('mobile Composer recipient suggestions', () => {
 
 	beforeEach(() => {
 		wrapper = shallowMount(Composer, {
-			mocks: {
-				t: (app, text) => text,
-			},
+			mocks: l10nMocks,
 		})
 	})
 
@@ -100,7 +99,7 @@ describe('mobile Composer recipient suggestions', () => {
 			forwardedFrom: 'Alice',
 			attachments: [{ type: 'message-attachment', id: '2', mailboxId: 5, uid: 42, fileName: 'invoice.pdf', size: 1000 }],
 		}
-		const forwarding = shallowMount(Composer, { mocks: { t: (app, text) => text } })
+		const forwarding = shallowMount(Composer, { mocks: l10nMocks })
 		store.composerPrefill = null
 		await forwarding.setData({ to: 'x@y.example', editorHtml: 'FYI' })
 
@@ -122,7 +121,7 @@ describe('mobile Composer recipient suggestions', () => {
 			attachments: [{ type: 'message-attachment', id: '2', mailboxId: 5, uid: 42 }],
 			inlineAttachments: [{ type: 'message-attachment-inline', id: '3', mailboxId: 5, uid: 42, fileName: 'logo.png' }],
 		}
-		const forwarding = shallowMount(Composer, { mocks: { t: (app, text) => text } })
+		const forwarding = shallowMount(Composer, { mocks: l10nMocks })
 		store.composerPrefill = null
 		await forwarding.setData({ to: 'x@y.example', editorHtml: 'FYI' })
 
@@ -145,7 +144,7 @@ describe('mobile Composer recipient suggestions', () => {
 			attachments: [{ type: 'message-attachment', id: '2', mailboxId: 5, uid: 42, fileName: 'q.pdf' }],
 			inlineAttachments: [{ type: 'message-attachment-inline', id: '3', mailboxId: 5, uid: 42, fileName: 'logo.png' }],
 		}
-		const forwarding = shallowMount(Composer, { mocks: { t: (app, text) => text } })
+		const forwarding = shallowMount(Composer, { mocks: l10nMocks })
 		store.composerPrefill = null
 
 		expect(forwarding.vm.attachments.map((attachment) => attachment.fileName)).toEqual(['q.pdf'])
@@ -160,7 +159,7 @@ describe('mobile Composer recipient suggestions', () => {
 			attachments: [],
 			inlineAttachments: [{ type: 'message-attachment-inline', id: '3', mailboxId: 5, uid: 42 }],
 		}
-		const forwarding = shallowMount(Composer, { mocks: { t: (app, text) => text } })
+		const forwarding = shallowMount(Composer, { mocks: l10nMocks })
 		store.composerPrefill = null
 		await forwarding.setData({ to: 'x@y.example', editorHtml: 'FYI' })
 
@@ -203,7 +202,7 @@ describe('mobile Composer recipient suggestions', () => {
 	it('inserts emoji at the cursor in plain-text mode', async () => {
 		const { store } = await import('../../src/store.js')
 		store.accounts[0].editorMode = 'plaintext'
-		const plainWrapper = shallowMount(Composer, { mocks: { t: (app, text) => text } })
+		const plainWrapper = shallowMount(Composer, { mocks: l10nMocks })
 		await plainWrapper.setData({ body: 'Hi' })
 		const el = plainWrapper.find('textarea').element
 		el.selectionStart = el.selectionEnd = 2
@@ -298,7 +297,7 @@ describe('mobile Composer recipient suggestions', () => {
 		const { store } = await import('../../src/store.js')
 		store.accounts[0].editorMode = 'plaintext'
 		// mount fresh so usesHtml is evaluated with the plaintext setting
-		const plainWrapper = shallowMount(Composer, { mocks: { t: (app, text) => text } })
+		const plainWrapper = shallowMount(Composer, { mocks: l10nMocks })
 		await plainWrapper.setData({ to: 'a@b.example', body: 'Hi' })
 
 		await plainWrapper.vm.send()
@@ -327,7 +326,7 @@ describe('mobile Composer recipient suggestions', () => {
 		const { store } = await import('../../src/store.js')
 		sendMessage.mockClear()
 		store.accounts[0].smimeCertificateId = 3
-		const signedWrapper = shallowMount(Composer, { mocks: { t: (app, text) => text } })
+		const signedWrapper = shallowMount(Composer, { mocks: l10nMocks })
 		await signedWrapper.setData({ to: 'a@b.example', editorHtml: 'Hi' })
 
 		expect(signedWrapper.find('.composer__smime').exists()).toBe(true)
@@ -343,5 +342,44 @@ describe('mobile Composer recipient suggestions', () => {
 
 	it('asks nothing for a sender without a certificate', () => {
 		expect(wrapper.find('.composer__smime').exists()).toBe(false)
+	})
+})
+
+describe('mobile Composer shows names exactly as they are', () => {
+	// The real t() escapes inserted values unless told the result is text,
+	// and Vue escapes {{ }} again: "AT&T" showed as "AT&amp;T"
+	it('in the forwarded-message line', async () => {
+		const { store } = await import('../../src/store.js')
+		store.composerPrefill = {
+			accountId: 1,
+			forwardedHtml: '<p>Body</p>',
+			forwardedFrom: "AT&T O'Brien <img src=x onerror=alert(1)>",
+		}
+		const forwarding = shallowMount(Composer, { mocks: l10nMocks })
+		store.composerPrefill = null
+
+		const line = forwarding.find('.composer__forwarded span')
+		expect(line.text()).toBe("↪ Forwarded message from AT&T O'Brien <img src=x onerror=alert(1)> is included below")
+		expect(line.find('img').exists()).toBe(false)
+	})
+
+	it('when a file could not be uploaded', async () => {
+		const { uploadAttachment } = await import('../../src/api/mail.js')
+		uploadAttachment.mockRejectedValueOnce(new Error('network'))
+		const composer = shallowMount(Composer, { mocks: l10nMocks })
+
+		await composer.vm.onFiles({ target: { files: [{ name: "o'brien & co.pdf", size: 10 }], value: '' } })
+		await composer.vm.$nextTick()
+
+		expect(composer.find('.composer__notice').text()).toBe("Could not upload o'brien & co.pdf")
+	})
+
+	it('when a file is too large', async () => {
+		const composer = shallowMount(Composer, { mocks: l10nMocks })
+
+		await composer.vm.onFiles({ target: { files: [{ name: 'Q&A <draft>.pdf', size: 26 * 1024 * 1024 }], value: '' } })
+		await composer.vm.$nextTick()
+
+		expect(composer.find('.composer__notice').text()).toBe('Q&A <draft>.pdf is too large to send by email (limit 25 MB in total)')
 	})
 })

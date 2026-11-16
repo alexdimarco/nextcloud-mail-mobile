@@ -17,10 +17,16 @@ use OCP\AppFramework\Utility\ITimeFactory;
 use OCP\IURLGenerator;
 use Psr\Log\LoggerInterface;
 use Throwable;
+use function array_keys;
 use function hash;
+use function is_string;
 use function json_encode;
 use function mb_substr;
+use function parse_url;
+use function preg_replace;
+use function str_replace;
 use function strlen;
+use function substr;
 use function usort;
 
 /**
@@ -54,7 +60,7 @@ class PushService {
 	 * @param ?string $device a short name for the device list, such as "Chrome on Android"
 	 * @return self::SUBSCRIBED|self::REJECTED|self::CONFLICT
 	 */
-	public function subscribe(string $userId, string $endpoint, string $p256dh, string $auth, ?int $tokenId = null, ?string $device = null): string {
+	public function subscribe(string $userId, #[\SensitiveParameter] string $endpoint, #[\SensitiveParameter] string $p256dh, #[\SensitiveParameter] string $auth, ?int $tokenId = null, ?string $device = null): string {
 		if (!EndpointPolicy::isAllowed($endpoint)) {
 			$this->logger->warning('Rejected a push subscription to an address that is not a known push service');
 			return self::REJECTED;
@@ -98,7 +104,7 @@ class PushService {
 	 * row to the current sign-in: Nextcloud replaces a session's sign-in
 	 * when it renews it, so the phone page reports the new one on each visit.
 	 */
-	public function isSubscribed(string $userId, string $endpoint, ?int $tokenId): bool {
+	public function isSubscribed(string $userId, #[\SensitiveParameter] string $endpoint, ?int $tokenId): bool {
 		$existing = $this->mapper->findByEndpointHash(hash('sha256', $endpoint));
 		if ($existing === null || $existing->getUserId() !== $userId) {
 			return false;
@@ -110,7 +116,7 @@ class PushService {
 		return true;
 	}
 
-	public function unsubscribe(string $userId, string $endpoint): void {
+	public function unsubscribe(string $userId, #[\SensitiveParameter] string $endpoint): void {
 		$this->mapper->deleteByEndpointHash($userId, hash('sha256', $endpoint));
 	}
 
@@ -160,7 +166,7 @@ class PushService {
 	 *                                                                                       url is only the part after "#"; the phone resolves it
 	 * @return int how many notifications the push services accepted
 	 */
-	public function pushToUser(string $userId, array $payloads): int {
+	public function pushToUser(string $userId, #[\SensitiveParameter] array $payloads): int {
 		if ($payloads === []) {
 			return 0;
 		}
@@ -184,38 +190,43 @@ class PushService {
 				'privateKey' => $keys['privateKey'],
 			]);
 		} catch (Throwable $e) {
-			$this->logger->error('Could not set up web push: ' . $e->getMessage(), ['exception' => $e]);
+			// Without the exception itself: its trace holds the web push
+			// library's constructor arguments, which include the private key
+			$this->logger->error('Could not set up web push: ' . $e::class . ': ' . $e->getMessage());
 			return 0;
 		}
 
 		/** @var array<string, PushSubscription> $byEndpoint */
 		$byEndpoint = [];
-		foreach ($subscriptions as $subscription) {
-			// Checked again before every send, in case a row predates a
-			// change to the allowlist
-			if (!EndpointPolicy::isAllowed($subscription->getEndpoint())) {
-				$this->mapper->delete($subscription);
-				continue;
-			}
-			$byEndpoint[$subscription->getEndpoint()] = $subscription;
-			foreach ($payloads as $payload) {
-				$webPush->queueNotification(
-					Subscription::create([
-						'endpoint' => $subscription->getEndpoint(),
-						'publicKey' => $subscription->getPubkey(),
-						'authToken' => $subscription->getAuthToken(),
-						'contentEncoding' => 'aes128gcm',
-					]),
-					(string)json_encode($payload, JSON_INVALID_UTF8_SUBSTITUTE | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
-				);
-			}
-		}
-		if ($byEndpoint === []) {
-			return 0;
-		}
-
 		$delivered = 0;
+		// Queueing hands push addresses and browser keys to the web push
+		// library, so it is inside the same guard as sending: whatever goes
+		// wrong is logged below without them, never as a raw exception
 		try {
+			foreach ($subscriptions as $subscription) {
+				// Checked again before every send, in case a row predates a
+				// change to the allowlist
+				if (!EndpointPolicy::isAllowed($subscription->getEndpoint())) {
+					$this->mapper->delete($subscription);
+					continue;
+				}
+				$byEndpoint[$subscription->getEndpoint()] = $subscription;
+				foreach ($payloads as $payload) {
+					$webPush->queueNotification(
+						Subscription::create([
+							'endpoint' => $subscription->getEndpoint(),
+							'publicKey' => $subscription->getPubkey(),
+							'authToken' => $subscription->getAuthToken(),
+							'contentEncoding' => 'aes128gcm',
+						]),
+						(string)json_encode($payload, JSON_INVALID_UTF8_SUBSTITUTE | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+					);
+				}
+			}
+			if ($byEndpoint === []) {
+				return 0;
+			}
+
 			foreach ($webPush->flush() as $report) {
 				$endpoint = $report->getEndpoint();
 				$subscription = $byEndpoint[$endpoint] ?? null;
@@ -248,11 +259,44 @@ class PushService {
 					}
 					$this->mapper->update($subscription);
 				}
-				$this->logger->warning('Web push delivery failed: ' . $report->getReason());
+				// Not the report's reason: it is the HTTP client's error
+				// message, which contains the whole push address
+				$this->logger->warning('Web push delivery failed for ' . self::describeEndpoint($endpoint) . ': '
+					. ($status !== null ? 'HTTP ' . $status : 'no answer from the push service'));
 			}
 		} catch (Throwable $e) {
-			$this->logger->warning('Web push delivery failed: ' . $e->getMessage(), ['exception' => $e]);
+			// Without the exception itself: its message and trace can carry
+			// push addresses, which would then be written to the log
+			$this->logger->warning('Web push delivery failed: ' . $e::class . ': '
+				. self::redact($e->getMessage(), array_keys($byEndpoint)));
 		}
 		return $delivered;
+	}
+
+	/**
+	 * A push address as it may appear in logs: the push service's host and a
+	 * short fingerprint, for example "push address 3fa2c91b07de at
+	 * fcm.googleapis.com". The address itself lets anyone who has it (and
+	 * this server's key) reach that device, so it never goes into a log. The
+	 * fingerprint is the start of the subscription's endpoint_hash column,
+	 * so an admin can still find the row.
+	 */
+	public static function describeEndpoint(#[\SensitiveParameter] string $endpoint): string {
+		$host = parse_url($endpoint, PHP_URL_HOST);
+		return 'push address ' . substr(hash('sha256', $endpoint), 0, 12)
+			. ' at ' . (is_string($host) && $host !== '' ? $host : 'an unknown host');
+	}
+
+	/**
+	 * Remove push addresses from an error message: the known ones become
+	 * {@see self::describeEndpoint()}, and any other web address is dropped.
+	 *
+	 * @param list<string> $endpoints
+	 */
+	private static function redact(#[\SensitiveParameter] string $text, #[\SensitiveParameter] array $endpoints): string {
+		foreach ($endpoints as $endpoint) {
+			$text = str_replace($endpoint, self::describeEndpoint($endpoint), $text);
+		}
+		return (string)preg_replace('~https?://\S+~i', '[address removed]', $text);
 	}
 }

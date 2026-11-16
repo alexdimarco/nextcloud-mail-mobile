@@ -6,10 +6,11 @@
 # build/mail_mobile-<version>.tar.gz (the file the app store takes).
 #
 # Before running it:
-#   npm ci && npm run build                      (the front end, into js/)
-#   composer install --no-dev && composer scope  (the renamed web push library)
-# `composer scope` needs the dev tools, so in practice:
-#   composer install && composer scope
+#   npm ci --ignore-scripts && npm run build                       (the front end, into js/)
+#   composer install --no-plugins --no-scripts && composer scope  (the renamed web push library)
+# `composer scope` needs the dev tools, so composer install is without
+# --no-dev. --ignore-scripts, --no-plugins and --no-scripts keep the
+# packages' own install scripts from running; this app needs none.
 set -euo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
@@ -17,11 +18,11 @@ cd "$root"
 
 version="$(sed -n 's:.*<version>\(.*\)</version>.*:\1:p' appinfo/info.xml | head -n 1)"
 if [ ! -f js/mobile-manifest.json ]; then
-	echo "js/ is missing: run 'npm ci && npm run build' first" >&2
+	echo "js/ is missing: run 'npm ci --ignore-scripts && npm run build' first" >&2
 	exit 1
 fi
 if [ ! -f vendor-scoped/autoload/autoload.php ]; then
-	echo "vendor-scoped/ is missing: run 'composer install && composer scope' first" >&2
+	echo "vendor-scoped/ is missing: run 'composer install --no-plugins --no-scripts && composer scope' first" >&2
 	exit 1
 fi
 

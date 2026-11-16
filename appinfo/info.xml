@@ -14,8 +14,8 @@
 - Read, reply, reply all, forward, swipe to archive or delete, select many messages at once.
 - Optional push notifications when new mail arrives in your inbox.
 
-Mail Mobile does not replace Mail. It needs the Mail app (version 5.13 or newer, older than 7) and uses your Mail accounts as they are set up there. Mail can update on its own schedule.]]></description>
-	<version>0.1.0</version>
+Mail Mobile does not replace Mail. It needs the Mail app (version 5.13 to 6.x) and uses your Mail accounts as they are set up there. Mail can update on its own schedule.]]></description>
+	<version>0.2.0</version>
 	<licence>agpl</licence>
 	<author>Alex DiMarco</author>
 	<namespace>MailMobile</namespace>

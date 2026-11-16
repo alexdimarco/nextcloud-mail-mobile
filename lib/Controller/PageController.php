@@ -82,11 +82,7 @@ class PageController extends Controller {
 
 		if (!$status->usable) {
 			return new StandaloneTemplateResponse(Application::APP_ID, 'main', [
-				'needsMail' => $this->l->t('Mail Mobile needs the Mail app, version %1$s or newer and older than %2$s. This server has: %3$s.', [
-					'5.13',
-					'7',
-					$status->found,
-				]),
+				'needsMail' => MailBridge::needsMailMessage($this->l, $status->found),
 				'script' => null,
 				'version' => $this->appVersion(),
 			], TemplateResponse::RENDER_AS_BASE);

@@ -85,7 +85,7 @@ class PageControllerTest extends TestCase {
 
 		$this->assertSame(TemplateResponse::RENDER_AS_BASE, $response->getRenderAs());
 		$this->assertSame(
-			'Mail Mobile needs the Mail app, version 5.13 or newer and older than 7. This server has: Mail 5.10.11.',
+			'Mail Mobile needs the Mail app, version 5.13 to 6.x. This server has: Mail 5.10.11.',
 			$response->getParams()['needsMail'],
 		);
 		$this->assertNull($response->getParams()['script']);
