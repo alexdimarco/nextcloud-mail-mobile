@@ -25,8 +25,8 @@ use function mb_substr;
 use function parse_url;
 use function preg_replace;
 use function str_replace;
-use function substr;
 use function strlen;
+use function substr;
 use function usort;
 
 /**
