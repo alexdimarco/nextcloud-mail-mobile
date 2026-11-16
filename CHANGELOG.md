@@ -26,6 +26,20 @@ Works with Mail 6 as well as Mail 5.13.
 - The integration test now uses a real mail server and checks every Mail
   address the phone page calls, and that new inbox mail queues a
   notification. CI runs it with Mail 5.13.2 and Mail 6.0.0-alpha.3.
+- Accounts someone shared with you (Mail's delegation): the reconnect
+  banner says only the owner can reconnect it, and the README says
+  notifications for such an account go only to its owner.
+- Names, addresses and file names inserted into messages on the page show
+  exactly as they are ("AT&T", "o'brien@…"), no longer as "&amp;" or
+  "&#39;". They were escaped twice; they are still shown only as text.
+- The push address is no longer sent in a web address when notifications
+  are turned off, and failed sends log only a short fingerprint of it, the
+  push service's name and the HTTP status.
+- Release runs build and package only this app: building Mail from source
+  happens only for pull requests and pushes, and every package install in
+  CI runs with install scripts and Composer plugins off.
+- scripts/check-mail-routes.py refuses any server that is not on the same
+  machine.
 
 ## 0.1.0 – not released
 
