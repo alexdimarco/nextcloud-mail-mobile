@@ -21,10 +21,9 @@ Mail Mobile does not replace Mail. It needs the Mail app (version 5.13 or newer,
 	<namespace>MailMobile</namespace>
 	<category>social</category>
 	<category>tools</category>
-	<!-- Replace OWNER once the public repository exists; the release workflow refuses to build until then -->
-	<website>https://github.com/OWNER/nextcloud-mail-mobile</website>
-	<bugs>https://github.com/OWNER/nextcloud-mail-mobile/issues</bugs>
-	<repository>https://github.com/OWNER/nextcloud-mail-mobile</repository>
+	<website>https://github.com/alexdimarco/nextcloud-mail-mobile</website>
+	<bugs>https://github.com/alexdimarco/nextcloud-mail-mobile/issues</bugs>
+	<repository>https://github.com/alexdimarco/nextcloud-mail-mobile</repository>
 	<dependencies>
 		<php min-version="8.2" max-version="8.5"/>
 		<nextcloud min-version="33" max-version="35"/>
