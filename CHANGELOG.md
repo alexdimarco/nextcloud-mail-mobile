@@ -6,7 +6,28 @@
 
 All notable changes to Mail Mobile are listed here.
 
-## 0.1.0 – not released yet
+## 0.2.0 – not released yet
+
+Works with Mail 6 as well as Mail 5.13.
+
+- Supported Mail versions: 5.13 to 6.x. Tested with Mail 5.13.2 and with
+  Mail 6.0.0-alpha.3 (no Mail 6 release exists yet; it is built from
+  Nextcloud's source at a pinned commit), on Nextcloud 33, 34 and 35.
+  Every Mail class, event, web address and answer field this app uses was
+  compared between the two; none was removed or changed, Mail 6 only adds.
+- The message for an unsupported Mail now reads, for example: "Mail Mobile
+  needs the Mail app, version 5.13 to 6.x. This server has: Mail 7.0.0."
+  The phone page and personal settings share one wording.
+- Mail 6 accounts that sign in to the mail server with single sign-on:
+  when that sign-in expired and Mail could not renew it, the phone page
+  names the account and links to the full Mail app to reconnect it.
+- New-mail notifications use Mail 6's own test for "this is the inbox"
+  (marked as the inbox, or named INBOX).
+- The integration test now uses a real mail server and checks every Mail
+  address the phone page calls, and that new inbox mail queues a
+  notification. CI runs it with Mail 5.13.2 and Mail 6.0.0-alpha.3.
+
+## 0.1.0 – not released
 
 First version as a separate app beside the official Nextcloud Mail app.
 

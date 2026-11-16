@@ -27,13 +27,18 @@ What you can do on the phone page:
 | | Supported |
 |---|---|
 | Nextcloud | 33, 34, 35 |
-| Mail app | 5.13 or newer, older than 7 |
+| Mail app | 5.13 to 6.x (tested: 5.13.2, and 6.0.0-alpha.3 built from Mail's source) |
 | PHP | 8.2 to 8.5 (whatever your Nextcloud version runs on) |
 | Your server address | must use `https://` (phones only allow home-screen apps and notifications on secure sites) |
 | Background jobs | Nextcloud's background jobs set to **Cron**, for notifications (see below) |
 
 Mail 7 and newer are refused on purpose until they have been tested. The page
 then says so in plain words instead of breaking.
+
+Mail 6 has no published release yet. Mail Mobile is tested against Mail
+6.0.0-alpha.3, built from Nextcloud's source code at the commit named in
+[`scripts/build-mail.sh`](scripts/build-mail.sh). Nothing Mail Mobile uses
+changed between Mail 5.13 and that build; Mail 6 only adds things.
 
 **Words used below:**
 
@@ -109,7 +114,11 @@ Mail Mobile**, and in the Nextcloud app menu.
 - Mail does not promise these as a public interface. When a Mail update
   changes one of them, those two files are the ones to fix. Until then, the
   page shows a plain message such as *"Mail Mobile needs the Mail app,
-  version 5.13 or newer and older than 7. This server has: Mail 7.0.0."*
+  version 5.13 to 6.x. This server has: Mail 7.0.0."*
+- With Mail 6, an account can sign in to the mail server with your single
+  sign-on login (OpenID Connect) instead of a password. When that sign-in
+  expires and Mail cannot renew it, the phone page says so for that
+  account and links to the full Mail app, where **Reconnect** renews it.
 
 ## Notifications
 
@@ -133,6 +142,11 @@ settings → Mail Mobile**. The sender is then shown with their real address,
 for example `IT Support <someone@example.com>`, because anyone can put any
 name on an email. Up to 3 new messages get one notification each; more than
 3 get one summary.
+
+**Accounts Mail reaches over JMAP** (new in Mail 6, set up by an admin
+with `occ`) get no notifications: Mail does not announce their new mail
+to other apps, so Mail's own notifications do not fire for them either.
+Normal (IMAP) accounts are not affected.
 
 **They are not instant.** A notification arrives after Mail's next background
 check plus the next cron run. Mail checks every 15 minutes for people who
@@ -199,17 +213,29 @@ composer cs:check        # code style
 
 scripts/build-release.sh
 scripts/integration-test.sh 33 5.13.2   # Nextcloud 33 + Mail 5.13.2 in Docker
+
+# Mail 6 has no release yet: build it from Mail's source first
+scripts/build-mail.sh 6.0.0-alpha.3 build/mail-6.0.0-alpha.3.tar.gz
+MAIL_TARBALL=build/mail-6.0.0-alpha.3.tar.gz scripts/integration-test.sh 35 6.0.0-alpha.3
 ```
 
-The integration test starts a throwaway Nextcloud in Docker (images pinned by
-digest), installs Mail from its release (pinned by checksum) and the built app,
-and checks the page, the manifest, the service worker, the push key, the
-allowlist, and the "needs Mail" message.
+The integration test starts a throwaway Nextcloud and a throwaway mail
+server (Dovecot and Postfix, the image Mail's own tests use) in Docker,
+all pinned by digest. It installs Mail (a release pinned by checksum, or a
+build from `scripts/build-mail.sh`, which pins Mail's source commit) and
+the built app, and checks the page, the manifest, the service worker, the
+push key, the allowlist and sign-out. Then
+[`scripts/check-mail-routes.py`](scripts/check-mail-routes.py) uses every
+Mail address the phone page calls with a real mail account (folders, first
+sync, list, reading, flags, address search, attachments, sending, moving,
+deleting), new inbox mail must queue a notification job, and with Mail
+turned off the page must show the "needs Mail" message.
 
 GitHub runs all of this on every push to `main` and on every pull request
-(see `.github/workflows/ci.yml`), including the integration test on
-Nextcloud 33, 34 and 35. A version tag (`v0.1.0`) runs the same checks and,
-if they pass, builds the release tarball (`.github/workflows/release.yml`).
+(see `.github/workflows/ci.yml`), on GitHub's own runners, including the
+integration test on Nextcloud 33, 34 and 35 with Mail 5.13.2 and with Mail
+6.0.0-alpha.3. A version tag (`v0.2.0`) runs the same checks and, if they
+pass, builds the release tarball (`.github/workflows/release.yml`).
 
 ### Layout
 
@@ -225,6 +251,8 @@ if they pass, builds the release tarball (`.github/workflows/release.yml`).
 | `lib/Listener/NewMailListener.php` | queues a notification when Mail stores new inbox mail |
 | `lib/BackgroundJob/PushJob.php` | sends it on the next cron run |
 | `scoper.inc.php`, `scripts/scope-vendor.php` | rename the web push library so it never clashes with Nextcloud's own copies |
+| `scripts/build-mail.sh` | builds a Mail version that has no release yet from Mail's source, for the tests |
+| `scripts/check-mail-routes.py` | the integration test's check of every Mail address the phone page calls |
 
 ## Not in this version
 
@@ -233,7 +261,7 @@ if they pass, builds the release tarball (`.github/workflows/release.yml`).
 - signed or encrypted mail (S/MIME, PGP) in the composer. If your sender
   address has an S/MIME certificate, the composer says so and only sends
   unsigned after you tick a box; use the full Mail app for signed mail.
-- Mail 6 is supported in the code but not yet tested: it has no release yet
+- notifications for accounts Mail reaches over JMAP (see Notifications)
 
 ## Licence
 
