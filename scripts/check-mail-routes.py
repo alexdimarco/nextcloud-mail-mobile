@@ -18,7 +18,7 @@ from the environment (NC_PASSWORD), not the command line.
 
 Usage: NC_PASSWORD=... check-mail-routes.py --base http://localhost:8089
            --user admin --mail-user user@domain.tld --mail-password ...
-           --imap-port 3143 --mail-version 6.0.0-alpha.3
+           --imap-port 3993 --mail-version 6.0.0-alpha.3
 Prints the inbox's database id on its last line.
 """
 
@@ -28,6 +28,7 @@ import imaplib
 import json
 import os
 import re
+import ssl
 import sys
 import time
 import urllib.error
@@ -118,7 +119,7 @@ def require_keys(what, value, keys):
 
 
 def append_message(port, user, password, subject, html=True, attachment=False):
-    """Put one message straight into the inbox over IMAP."""
+    """Put one message straight into the inbox over IMAP (TLS)."""
     message = EmailMessage()
     message['From'] = 'Sam Sender <sam@example.com>'
     message['To'] = user
@@ -130,7 +131,8 @@ def append_message(port, user, password, subject, html=True, attachment=False):
         message.add_alternative(f'<p>HTML of <b>{subject}</b></p>', subtype='html')
     if attachment:
         message.add_attachment(b'hello\n', maintype='text', subtype='plain', filename='note.txt')
-    imap = imaplib.IMAP4('127.0.0.1', port)
+    # The throwaway test server's certificate is self-signed
+    imap = imaplib.IMAP4_SSL('127.0.0.1', port, ssl_context=ssl._create_unverified_context())
     try:
         imap.login(user, password)
         status, _ = imap.append('INBOX', '', imaplib.Time2Internaldate(time.time()), message.as_bytes())

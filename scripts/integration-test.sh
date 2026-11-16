@@ -57,7 +57,7 @@ MAIL_URL="https://github.com/nextcloud-releases/mail/releases/download/v${MAIL_V
 IMAP_IMAGE="ghcr.io/christophwurst/docker-imap-devel@sha256:b76a062268d7342ccec549f5323a0b6dc1b6ac55b03367f474934927653f5cb5"
 MAIL_USER="user@domain.tld"
 MAIL_PASS="mypassword"
-IMAP_PORT="${IMAP_PORT:-3143}"
+IMAP_PORT="${IMAP_PORT:-3993}"
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
 app="$root/build/mail_mobile"
@@ -72,6 +72,15 @@ password="$(python3 -c 'import secrets; print(secrets.token_hex(12))')"
 base="http://localhost:$PORT"
 
 cleanup() {
+	status=$?
+	if [ "$status" -ne 0 ]; then
+		# What the server and the mail server said, to see why
+		echo "-- Nextcloud log (last warnings and errors):" >&2
+		docker exec "$name" sh -c 'tail -n 400 /var/www/html/data/nextcloud.log 2>/dev/null' \
+			| grep -E '"level":[2-4],' | tail -n 8 | cut -c1-1500 >&2 || true
+		echo "-- mail server log (last lines):" >&2
+		docker logs --tail 15 "$name-mailserver" >&2 2>&1 || true
+	fi
 	docker rm -f "$name" "$name-mailserver" >/dev/null 2>&1 || true
 	docker network rm "$name-net" >/dev/null 2>&1 || true
 	rm -rf "$work"
@@ -98,7 +107,7 @@ echo "ok: Mail $found"
 step "Start a throwaway mail server"
 docker network create "$name-net" >/dev/null
 docker run -d --name "$name-mailserver" --network "$name-net" --network-alias mailserver \
-	-p "127.0.0.1:$IMAP_PORT:143" \
+	-p "127.0.0.1:$IMAP_PORT:993" \
 	-e MAILNAME=mail.domain.tld -e MAIL_ADDRESS="$MAIL_USER" -e MAIL_PASS="$MAIL_PASS" \
 	"$IMAP_IMAGE" >/dev/null
 
@@ -227,7 +236,7 @@ echo "ok: accounts and address search answer"
 
 step "Every Mail address the phone page calls works with a real mail account"
 for _ in $(seq 1 60); do
-	if python3 -c 'import imaplib,sys; imaplib.IMAP4("127.0.0.1", int(sys.argv[1])).logout()' "$IMAP_PORT" 2>/dev/null; then
+	if python3 -c 'import imaplib, ssl, sys; imaplib.IMAP4_SSL("127.0.0.1", int(sys.argv[1]), ssl_context=ssl._create_unverified_context()).logout()' "$IMAP_PORT" 2>/dev/null; then
 		break
 	fi
 	sleep 2
@@ -235,8 +244,10 @@ done
 # Background jobs only from cron, which is not running here: nothing is
 # sent to a push service during the test
 occ background:cron
+# The throwaway mail server has a self-signed certificate (as in Mail's own tests)
+occ config:system:set app.mail.verify-tls-peer --type bool --value false
 occ mail:account:create-imap admin "Test account" "$MAIL_USER" \
-	mailserver 143 none "$MAIL_USER" "$MAIL_PASS" \
+	mailserver 993 ssl "$MAIL_USER" "$MAIL_PASS" \
 	mailserver 25 none "$MAIL_USER" "$MAIL_PASS"
 inbox_id="$(NC_PASSWORD="$password" python3 -I "$root/scripts/check-mail-routes.py" \
 	--base "$base" --user admin --mail-user "$MAIL_USER" --mail-password "$MAIL_PASS" \
@@ -254,9 +265,12 @@ echo "$jobs" | python3 -c '
 import json, sys
 inbox = int(sys.argv[1])
 jobs = [json.loads(line) for line in sys.stdin if line.strip()]
-match = [j for j in jobs if j.get("userId") == "admin" and j.get("mailboxId") == inbox and j.get("count") == 1]
+# The message the test sent to itself may arrive in the same sync, so
+# one or more new messages; at most 3 ids are kept, never any content
+match = [j for j in jobs if j.get("userId") == "admin" and j.get("mailboxId") == inbox and j.get("count", 0) >= 1]
 assert match, f"no notification job for the inbox: {jobs}"
 assert set(match[0]) == {"userId", "accountId", "mailboxId", "messageIds", "count"}, match[0]
+assert len(match[0]["messageIds"]) == min(match[0]["count"], 3), match[0]
 print("ok:", match[0])
 ' "$inbox_id" || fail "no notification job was queued for the new mail"
 
