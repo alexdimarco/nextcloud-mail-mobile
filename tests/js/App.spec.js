@@ -6,6 +6,7 @@
 import { shallowMount } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import App from '../../src/App.vue'
+import { l10nMocks } from './l10n.js'
 
 const storeMock = vi.hoisted(() => ({
 	accounts: [],
@@ -26,9 +27,7 @@ vi.mock('../../src/store.js', () => ({
 
 function mountApp() {
 	window.matchMedia = window.matchMedia ?? (() => ({ matches: false, addEventListener() {}, removeEventListener() {} }))
-	return shallowMount(App, {
-		mocks: { t: (app, text, params) => text.replace(/{(\w+)}/g, (match, key) => params?.[key] ?? match) },
-	})
+	return shallowMount(App, { mocks: l10nMocks })
 }
 
 describe('mobile App when no folder could be shown', () => {
@@ -77,6 +76,38 @@ describe('mobile App with a Mail 6 account whose sign-in expired', () => {
 		expect(banners.at(0).text()).toContain('The sign-in for me@example.com expired')
 		expect(banners.at(0).text()).not.toContain('other@example.com')
 		expect(banners.at(0).find('a').attributes('href')).toContain('/apps/mail/')
+	})
+
+	it('shows an address with an apostrophe or & exactly as it is', () => {
+		// The real t() escapes inserted values unless told the result is
+		// text; Vue escapes {{ }} again, which showed o&#39;brien+a&amp;b
+		storeMock.accounts = [{ id: 1, emailAddress: "o'brien+a&b@example.com", mailboxes: [], oauthNeedsReauth: true }]
+		const banner = mountApp().find('.mob__banner')
+		expect(banner.text()).toContain("The sign-in for o'brien+a&b@example.com expired")
+		expect(banner.text()).not.toContain('&amp;')
+		expect(banner.text()).not.toContain('&#39;')
+	})
+
+	it('shows an address that looks like HTML as text, never as markup', () => {
+		storeMock.accounts = [{ id: 1, emailAddress: '<img src=x onerror=alert(1)>@example.com', mailboxes: [], oauthNeedsReauth: true }]
+		const banner = mountApp().find('.mob__banner')
+		expect(banner.text()).toContain('<img src=x onerror=alert(1)>@example.com')
+		expect(banner.find('img').exists()).toBe(false)
+	})
+
+	it('tells someone an account was shared with that only its owner can reconnect it', () => {
+		// Mail lists accounts others delegated to you with isDelegated;
+		// their sign-in is the owner's, so "Reconnect" is not offered
+		storeMock.accounts = [{ id: 3, emailAddress: 'boss@example.com', mailboxes: [], oauthNeedsReauth: true, isDelegated: true }]
+		const banner = mountApp().find('.mob__banner')
+		expect(banner.text()).toContain('The sign-in for boss@example.com expired')
+		expect(banner.text()).toContain('only they can reconnect it')
+		expect(banner.text()).not.toContain('choose Reconnect')
+		expect(banner.find('a').exists()).toBe(false)
+	})
+
+	it('uses a t() that escapes like Nextcloud\'s, so double escaping shows up here', () => {
+		expect(l10nMocks.t('mail_mobile', 'Hi {name}', { name: "o'brien & <b>" })).toBe('Hi o&#39;brien &amp; &lt;b&gt;')
 	})
 
 	it('shows nothing extra for Mail 5 accounts, which have no such field', () => {

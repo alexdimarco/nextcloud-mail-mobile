@@ -122,6 +122,8 @@ Mail Mobile**, and in the Nextcloud app menu.
   sign-on login (OpenID Connect) instead of a password. When that sign-in
   expires and Mail cannot renew it, the phone page says so for that
   account and links to the full Mail app, where **Reconnect** renews it.
+  For an account someone shared with you, it says that only the owner can
+  reconnect it, since that sign-in is theirs.
 
 ## Notifications
 
@@ -145,6 +147,11 @@ settings → Mail Mobile**. The sender is then shown with their real address,
 for example `IT Support <someone@example.com>`, because anyone can put any
 name on an email. Up to 3 new messages get one notification each; more than
 3 get one summary.
+
+**Accounts shared with you.** Mail lets a person share (delegate) their
+mail account with you. You can read and send from it on the phone page as
+in Mail, but notifications for its new mail go only to its owner, never to
+the people it is shared with.
 
 **Accounts Mail reaches over JMAP** (new in Mail 6, set up by an admin
 with `occ`) get no notifications: Mail does not announce their new mail

@@ -196,7 +196,7 @@ def main():
         fail(f'Mail does not list the account {args.mail_user}')
     require_keys('an account', account, [
         'id', 'emailAddress', 'name', 'aliases', 'signature', 'smimeCertificateId',
-        'archiveMailboxId', 'trashMailboxId',
+        'archiveMailboxId', 'trashMailboxId', 'isDelegated',
     ])
     if args.mail_version.startswith('6.'):
         # The phone page shows a "reconnect" banner from this Mail 6 field

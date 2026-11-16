@@ -7,6 +7,7 @@
 import { shallowMount } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import Reader from '../../src/views/Reader.vue'
+import { l10nMocks } from './l10n.js'
 
 const message = {
 	accountId: 1,
@@ -53,7 +54,7 @@ describe('mobile Reader reply and forward', () => {
 		fetchMessage.mockResolvedValue({ ...message })
 		wrapper = shallowMount(Reader, {
 			propsData: { messageId: 9 },
-			mocks: { t: (app, text) => text },
+			mocks: l10nMocks,
 		})
 		await wrapper.vm.$nextTick()
 		await wrapper.vm.$nextTick()

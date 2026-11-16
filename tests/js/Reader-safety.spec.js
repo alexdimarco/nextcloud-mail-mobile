@@ -6,6 +6,7 @@
 import { mount } from '@vue/test-utils'
 import { describe, expect, it, vi } from 'vitest'
 import Reader, { htmlToText, linkify } from '../../src/views/Reader.vue'
+import { l10nMocks } from './l10n.js'
 
 vi.mock('../../src/api/mail.js', () => ({
 	fetchMessage: vi.fn(),
@@ -36,7 +37,7 @@ async function open(message) {
 	fetchMessage.mockResolvedValue(message)
 	const wrapper = mount(Reader, {
 		propsData: { messageId: 9 },
-		mocks: { t: (app, text) => text },
+		mocks: l10nMocks,
 	})
 	await new Promise((resolve) => setTimeout(resolve, 0))
 	return wrapper

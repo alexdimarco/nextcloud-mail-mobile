@@ -6,6 +6,7 @@
 import { shallowMount } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import MailboxPicker from '../../src/views/MailboxPicker.vue'
+import { l10nMocks } from './l10n.js'
 
 const push = vi.hoisted(() => ({
 	checkPushSubscription: vi.fn(),
@@ -57,7 +58,7 @@ function fakeBrowser(existing) {
 }
 
 async function mountPicker() {
-	const wrapper = shallowMount(MailboxPicker, { mocks: { t: (app, text) => text } })
+	const wrapper = shallowMount(MailboxPicker, { mocks: l10nMocks })
 	await new Promise((resolve) => setTimeout(resolve, 0))
 	return wrapper
 }

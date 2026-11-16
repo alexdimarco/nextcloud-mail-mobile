@@ -7,6 +7,7 @@
 import { shallowMount } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import EnvelopeList from '../../src/views/EnvelopeList.vue'
+import { l10nMocks } from './l10n.js'
 
 function envelope(id, overrides = {}) {
 	return {
@@ -65,7 +66,7 @@ describe('mobile EnvelopeList selection, swipe and move', () => {
 		fetchEnvelopes.mockResolvedValue(ENVELOPES.map((item) => ({ ...item, flags: { ...item.flags } })))
 		const instance = shallowMount(EnvelopeList, {
 			propsData: { mailbox },
-			mocks: { t: (app, text, vars) => (vars ? text.replace(/\{(\w+)\}/g, (m, key) => vars[key]) : text) },
+			mocks: l10nMocks,
 		})
 		// Skip the real release-animation delay in tests
 		instance.vm.wait = () => Promise.resolve()
@@ -307,10 +308,7 @@ describe('mobile EnvelopeList threaded (conversation) view', () => {
 		fetchEnvelopes.mockResolvedValue(ENVELOPES.map((item) => ({ ...item, flags: { ...item.flags } })))
 		const instance = shallowMount(EnvelopeList, {
 			propsData: { mailbox: INBOX },
-			mocks: {
-				t: (app, text, vars) => (vars ? text.replace(/\{(\w+)\}/g, (m, key) => vars[key]) : text),
-				n: (app, singular, plural, count, vars) => (count === 1 ? singular : plural).replace(/\{(\w+)\}/g, (m, key) => vars[key]),
-			},
+			mocks: l10nMocks,
 		})
 		instance.vm.wait = () => Promise.resolve()
 		await instance.vm.$nextTick()
