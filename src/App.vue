@@ -237,7 +237,22 @@ export default {
 		},
 
 		go(hash) {
+			if (window.location.hash === hash) {
+				// No new history entry: nothing to mark
+				return
+			}
 			window.location.hash = hash
+			// Mark the new entry as opened from inside this page, so back()
+			// knows the entry before it is one of ours
+			window.history.replaceState({ mailMobile: true }, '')
+		},
+
+		// Where back() leads when this page has no earlier entry of its own
+		parentHash() {
+			if (this.route.view === 'message' && this.route.params[0]) {
+				return `#/box/${this.route.params[0]}`
+			}
+			return '#/'
 		},
 
 		hardReload() {
@@ -247,8 +262,16 @@ export default {
 			window.location.replace(url.toString())
 		},
 
+		// Opened straight on a message (from a notification or a bookmark),
+		// the page has no earlier entry of its own: history.back() would do nothing or leave the app. Go to the
+		// message's folder instead, replacing the entry so the phone's own
+		// back gesture does not return here.
 		back() {
-			window.history.back()
+			if (window.history.state?.mailMobile) {
+				window.history.back()
+			} else {
+				window.location.replace(this.parentHash())
+			}
 		},
 
 		openMailbox(mailbox) {

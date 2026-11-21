@@ -48,6 +48,9 @@ Works with Mail 6 as well as Mail 5.13.
   address. The first of the account's own addresses in To, then Cc,
   decides; when none is visible (Bcc, a mailing list) it stays the main
   address. The From list can still change it.
+- The back arrow works on a message opened from a notification: it goes
+  to that message's folder. Before, it did nothing, because the page had
+  no earlier page to go back to.
 
 ## 0.1.0 – not released
 
