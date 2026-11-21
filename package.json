@@ -1,6 +1,6 @@
 {
   "name": "mail_mobile",
-  "version": "0.2.2",
+  "version": "0.3.0",
   "private": true,
   "description": "A phone-friendly web app for Nextcloud Mail",
   "license": "AGPL-3.0-or-later",

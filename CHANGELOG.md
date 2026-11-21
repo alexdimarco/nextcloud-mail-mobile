@@ -6,7 +6,7 @@
 
 All notable changes to Mail Mobile are listed here.
 
-## 0.3.0 – not released yet
+## 0.3.0 – 21 November 2026
 
 - On a slow or dead connection the page no longer waits for good:
   - Every call to Mail has a time limit: 20 seconds for reading and small
