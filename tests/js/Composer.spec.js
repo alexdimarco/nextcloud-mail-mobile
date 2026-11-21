@@ -386,6 +386,29 @@ describe('mobile Composer recipient suggestions', () => {
 	})
 })
 
+describe('mobile Composer From row', () => {
+	it('shows a list to pick from when there are several addresses', () => {
+		const wrapper = shallowMount(Composer, { mocks: l10nMocks })
+
+		const select = wrapper.find('.composer__select-wrap select')
+		expect(select.exists()).toBe(true)
+		expect(select.findAll('option').wrappers.map((option) => option.text()))
+			.toEqual(['me@example.com', 'Support <support@example.com>'])
+		expect(wrapper.find('.composer__from').exists()).toBe(false)
+	})
+
+	it('still shows the one address as plain text, with nothing to pick', async () => {
+		const { store } = await import('../../src/store.js')
+		const aliases = store.accounts[0].aliases
+		store.accounts[0].aliases = []
+		const wrapper = shallowMount(Composer, { mocks: l10nMocks })
+		store.accounts[0].aliases = aliases
+
+		expect(wrapper.find('.composer__from').text()).toBe('me@example.com')
+		expect(wrapper.find('select.composer__select').exists()).toBe(false)
+	})
+})
+
 describe('mobile Composer shows names exactly as they are', () => {
 	// The real t() escapes inserted values unless told the result is text,
 	// and Vue escapes {{ }} again: "AT&T" showed as "AT&amp;T"
