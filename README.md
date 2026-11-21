@@ -19,6 +19,7 @@ What you can do on the phone page:
 - read your inboxes and folders, with conversations grouped if you like
 - swipe a message to archive or delete it, or select many at once
 - reply, reply all, forward, add Cc and Bcc, pick a sender address and a signature
+- add another address to send from, straight from the From list
 - attach files
 - get a notification on your phone when new mail arrives in an inbox
 
@@ -147,6 +148,16 @@ settings → Mail Mobile**. The sender is then shown with their real address,
 for example `IT Support <someone@example.com>`, because anyone can put any
 name on an email. Up to 3 new messages get one notification each; more than
 3 get one summary.
+
+**Sending from other addresses.** The From list shows each account's
+address and its aliases (Mail's name for other addresses an account sends
+from). Its last choice, "Add an address …", adds one: type the address,
+the name to show with it and, with several accounts, the account it sends
+through (only your own accounts, never one shared with you). It is saved
+in Mail as an alias, exactly as in Mail's own account
+settings, so the full Mail app shows it too and can remove it. Mail does
+not check that your mail server lets that account send from the address:
+if the server does not, sending from it fails.
 
 **Accounts shared with you.** Mail lets a person share (delegate) their
 mail account with you. You can read and send from it on the phone page as

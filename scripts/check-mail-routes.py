@@ -9,7 +9,8 @@ a throwaway mail server are up, and the mail account exists in Mail. It
 signs in like a browser and uses the addresses in src/api/mail.js in the
 order a person would: accounts, folders, the first sync, the message
 list, a message, its HTML, its conversation, flags, address search, an
-attachment upload, sending through the outbox, moving, deleting. Then it
+attachment upload, sending through the outbox, adding an address to
+send from and sending from it, moving, deleting. Then it
 turns notifications on and lets one new message arrive, so the caller
 can check that Mail Mobile queued a notification for it.
 
@@ -168,6 +169,23 @@ def append_message(port, user, password, subject, html=True, attachment=False):
 SYNC_BODY = {'ids': [], 'lastMessageTimestamp': None, 'init': False, 'sortOrder': 'newest', 'query': None}
 
 
+def send_through_outbox(session, mail, account_id, to, subject, attachments=(), alias_id=None):
+    """Send as the phone page does: into Mail's outbox, then out."""
+    _, created = session.json('POST', f'{mail}/api/outbox', expect=(200, 201), body={
+        'accountId': account_id, 'subject': subject,
+        'bodyPlain': 'Hello from the phone page', 'bodyHtml': None, 'editorBody': 'Hello from the phone page',
+        'isHtml': False, 'smimeSign': False, 'smimeEncrypt': False,
+        'to': [{'label': 'Me', 'email': to}], 'cc': [], 'bcc': [],
+        'attachments': list(attachments),
+        'draftId': None, 'aliasId': alias_id, 'inReplyToMessageId': None, 'smimeCertificateId': None,
+        'sendAt': None, 'requestMdn': False, 'isPgpMime': False,
+    })
+    outbox_id = (created.get('data') or {}).get('id')
+    if not outbox_id:
+        fail(f'the outbox did not answer with an id: {created!r}'[:300])
+    session.request('POST', f'{mail}/api/outbox/{outbox_id}', expect=(200, 202))
+
+
 def sync(session, mailbox_id):
     """The phone page's refresh: a quick sync, and a full first sync when
     Mail answers that the folder was never synced (428)."""
@@ -295,23 +313,35 @@ def main():
                                upload=('attachment', 'phone.txt', b'from the phone\n'))
     require_keys('an uploaded attachment', uploaded, ['id'])
     sent_subject = f'Sent from the phone page {run}'
-    _, created = session.json('POST', f'{mail}/api/outbox', expect=(200, 201), body={
-        'accountId': account_id, 'subject': sent_subject,
-        'bodyPlain': 'Hello from the phone page', 'bodyHtml': None, 'editorBody': 'Hello from the phone page',
-        'isHtml': False, 'smimeSign': False, 'smimeEncrypt': False,
-        'to': [{'label': 'Me', 'email': args.mail_user}], 'cc': [], 'bcc': [],
-        'attachments': [{'type': 'local', 'id': uploaded['id']}],
-        'draftId': None, 'aliasId': None, 'inReplyToMessageId': None, 'smimeCertificateId': None,
-        'sendAt': None, 'requestMdn': False, 'isPgpMime': False,
-    })
-    outbox_id = (created.get('data') or {}).get('id')
-    if not outbox_id:
-        fail(f'the outbox did not answer with an id: {created!r}'[:300])
-    session.request('POST', f'{mail}/api/outbox/{outbox_id}', expect=(200, 202))
+    send_through_outbox(session, mail, account_id, args.mail_user, sent_subject,
+                        attachments=[{'type': 'local', 'id': uploaded['id']}])
     # Mail keeps a copy in Sent only after the mail server took the message
     sync(session, folders['Sent'])
     sent = find_subject(session, folders['Sent'], sent_subject)
     ok(f'address search, upload and sending work; the copy is in Sent (id {sent["databaseId"]})')
+
+    # Adding an address to send from (an alias), as the phone page's "Add
+    # an address" does; Mail lists it with the account, and mail sent from
+    # it carries it as the sender. Removed again afterwards.
+    alias_email = f'phone-{run}@{args.mail_user.split("@", 1)[1]}'
+    _, alias = session.json('POST', f'{mail}/api/accounts/{account_id}/aliases', expect=(201,),
+                            body={'alias': alias_email, 'aliasName': 'Phone page'})
+    require_keys('a new alias', alias, ['id', 'name', 'alias', 'signature'])
+    if not isinstance(alias['id'], int) or alias['alias'] != alias_email:
+        fail(f'the new alias came back as {alias!r}'[:300])
+    _, accounts = session.json('GET', f'{mail}/api/accounts')
+    listed = next((a for a in accounts if a.get('id') == account_id), {}).get('aliases') or []
+    if not any(entry.get('id') == alias['id'] and entry.get('alias') == alias_email for entry in listed):
+        fail(f'the account list does not show the new alias: {listed!r}'[:300])
+    alias_subject = f'Sent from a new address {run}'
+    send_through_outbox(session, mail, account_id, args.mail_user, alias_subject, alias_id=alias['id'])
+    sync(session, folders['Sent'])
+    from_alias = find_subject(session, folders['Sent'], alias_subject)
+    senders = [entry.get('email') for entry in from_alias.get('from') or []]
+    if senders != [alias_email]:
+        fail(f'mail sent from the new alias shows the sender {senders!r}, not {alias_email}')
+    session.request('DELETE', f'{mail}/api/accounts/{account_id}/aliases/{alias["id"]}')
+    ok(f'adding an address works, and mail sent from it shows it as the sender (alias {alias["id"]})')
 
     # Archiving (a move) and deleting (to the trash)
     session.request('POST', f'{mail}/api/messages/{message_id}/move', body={'destFolderId': folders['Archive']})

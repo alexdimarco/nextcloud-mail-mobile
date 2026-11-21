@@ -208,6 +208,31 @@ export async function fetchAccounts() {
 }
 
 /**
+ * Add an address to send from (an alias) to one account, as the full Mail
+ * app's account settings do. Mail stores it as given: it checks neither
+ * the address nor whether the mail server lets the account send from it,
+ * and it does not refuse an address the account already has.
+ *
+ * @param {number} accountId the account the address sends through
+ * @param {string} alias the address
+ * @param {string} aliasName the name shown with it
+ * @return {Promise<object>} the new alias, shaped like the account's aliases
+ */
+export async function createAlias(accountId, alias, aliasName) {
+	let resp
+	try {
+		resp = await http.post(generateUrl('/apps/mail/api/accounts/{accountId}/aliases', { accountId }), { alias, aliasName })
+	} catch (error) {
+		handleError(error)
+	}
+	if (typeof resp.data?.id !== 'number') {
+		// For example a proxy's or sign-in page's HTML instead of Mail's answer
+		handleError({ response: resp })
+	}
+	return resp.data
+}
+
+/**
  * The folders (mailboxes) of one account.
  *
  * @param {number} accountId the account id

@@ -6,6 +6,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
 	autocomplete,
+	createAlias,
 	fetchMailboxes,
 	isMailLoginError,
 	isNoAnswer,
@@ -135,6 +136,23 @@ describe('calls to Mail', () => {
 		axiosMock.get.mockResolvedValueOnce({ data: [{ label: 'Sam', email: 'sam@example.com' }] })
 		await autocomplete('sa')
 		expect(axiosMock.get).toHaveBeenCalledWith('/index.php/apps/mail/api/autoComplete', { params: { term: 'sa' }, timeout: 10_000 })
+	})
+
+	it('adds an address to send from to the account, as Mail\'s settings do', async () => {
+		const alias = { id: 12, name: 'Jane', alias: 'hello@second.example', signature: null }
+		axiosMock.post.mockResolvedValueOnce({ status: 201, data: alias })
+
+		await expect(createAlias(1, 'hello@second.example', 'Jane')).resolves.toEqual(alias)
+		expect(axiosMock.post).toHaveBeenCalledWith('/index.php/apps/mail/api/accounts/1/aliases', {
+			alias: 'hello@second.example',
+			aliasName: 'Jane',
+		}, { timeout: TIME_LIMIT_MS })
+	})
+
+	it('does not take an answer without the new address\'s number', async () => {
+		axiosMock.post.mockResolvedValueOnce({ status: 200, data: { status: 'ok' } })
+
+		await expect(createAlias(1, 'hello@second.example', 'Jane')).rejects.toBeTruthy()
 	})
 
 	it('notes in the store when Mail does not answer, and clears it on the next answer', async () => {

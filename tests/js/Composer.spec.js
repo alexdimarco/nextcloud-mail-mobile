@@ -5,33 +5,40 @@
  */
 
 import { shallowMount } from '@vue/test-utils'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import Composer from '../../src/views/Composer.vue'
 import { l10nMocks } from './l10n.js'
 
 vi.mock('../../src/api/mail.js', () => ({
 	autocomplete: vi.fn().mockResolvedValue([]),
+	createAlias: vi.fn(),
 	sendMessage: vi.fn(),
 	uploadAttachment: vi.fn(),
 }))
 
-vi.mock('../../src/store.js', () => ({
-	store: {
-		accounts: [{
-			id: 1,
-			emailAddress: 'me@example.com',
-			signature: '<p>Jane Doe</p><p>Example Org<br>+1 555 0100</p>',
-			aliases: [{
-				id: 7,
-				name: 'Support',
-				alias: 'support@example.com',
-				signature: '<p>Example Support</p>',
+// Observable like the real store, so the page follows changes to it (a
+// new address in the From list)
+vi.mock('../../src/store.js', async () => {
+	const { default: Vue } = await import('vue')
+	return {
+		store: Vue.observable({
+			accounts: [{
+				id: 1,
+				emailAddress: 'me@example.com',
+				name: 'Jane Doe',
+				signature: '<p>Jane Doe</p><p>Example Org<br>+1 555 0100</p>',
+				aliases: [{
+					id: 7,
+					name: 'Support',
+					alias: 'support@example.com',
+					signature: '<p>Example Support</p>',
+				}],
 			}],
-		}],
-		composerPrefill: null,
-		authError: null,
-	},
-}))
+			composerPrefill: null,
+			authError: null,
+		}),
+	}
+})
 
 describe('mobile Composer recipient suggestions', () => {
 	let wrapper
@@ -405,25 +412,175 @@ describe('mobile Composer when sending gets no answer', () => {
 })
 
 describe('mobile Composer From row', () => {
-	it('shows a list to pick from when there are several addresses', () => {
+	it('lists every address, then a choice to add one', () => {
 		const wrapper = shallowMount(Composer, { mocks: l10nMocks })
 
 		const select = wrapper.find('.composer__select-wrap select')
-		expect(select.exists()).toBe(true)
 		expect(select.findAll('option').wrappers.map((option) => option.text()))
-			.toEqual(['me@example.com', 'Support <support@example.com>'])
-		expect(wrapper.find('.composer__from').exists()).toBe(false)
+			.toEqual(['Jane Doe <me@example.com>', 'Support <support@example.com>', 'Add an address …'])
 	})
 
-	it('still shows the one address as plain text, with nothing to pick', async () => {
+	it('offers adding an address when there is only one', async () => {
 		const { store } = await import('../../src/store.js')
 		const aliases = store.accounts[0].aliases
 		store.accounts[0].aliases = []
 		const wrapper = shallowMount(Composer, { mocks: l10nMocks })
 		store.accounts[0].aliases = aliases
 
-		expect(wrapper.find('.composer__from').text()).toBe('me@example.com')
-		expect(wrapper.find('select.composer__select').exists()).toBe(false)
+		expect(wrapper.findAll('.composer__select-wrap select option').wrappers.map((option) => option.text()))
+			.toEqual(['Jane Doe <me@example.com>', 'Add an address …'])
+	})
+})
+
+describe('mobile Composer adds an address to send from', () => {
+	let wrapper
+	let store
+	let createAlias
+	let sendMessage
+	let savedAliases
+
+	beforeEach(async () => {
+		({ store } = await import('../../src/store.js'))
+		;({ createAlias, sendMessage } = await import('../../src/api/mail.js'))
+		createAlias.mockReset()
+		sendMessage.mockClear()
+		savedAliases = store.accounts[0].aliases
+		wrapper = shallowMount(Composer, { mocks: l10nMocks })
+	})
+
+	afterEach(() => {
+		store.accounts[0].aliases = savedAliases
+		store.accounts.splice(1)
+	})
+
+	async function openForm() {
+		await wrapper.find('.composer__select-wrap select').setValue('+add')
+	}
+
+	it('opens a form and keeps the current sender while it is open', async () => {
+		await openForm()
+
+		expect(wrapper.find('.composer__newaddr').exists()).toBe(true)
+		expect(wrapper.vm.identityKey).toBe('a1')
+		expect(wrapper.find('.composer__select-wrap select').element.value).toBe('a1')
+		// The name starts as the account's own
+		expect(wrapper.vm.newAddressName).toBe('Jane Doe')
+		expect(wrapper.find('.composer__newaddr-hint').text()).toContain('me@example.com')
+	})
+
+	it('adds the address in Mail, picks it and sends from it', async () => {
+		createAlias.mockResolvedValueOnce({ id: 12, name: 'Jane Doe', alias: 'hello@second.example', signature: null })
+		await openForm()
+		await wrapper.setData({ newAddress: ' hello@second.example ' })
+
+		await wrapper.vm.addAddress()
+		await wrapper.vm.$nextTick()
+
+		expect(createAlias).toHaveBeenCalledWith(1, 'hello@second.example', 'Jane Doe')
+		expect(wrapper.find('.composer__newaddr').exists()).toBe(false)
+		expect(wrapper.vm.identityKey).toBe('l12')
+		expect(wrapper.find('.composer__select-wrap select').element.value).toBe('l12')
+		// No signature of its own: the account's
+		expect(wrapper.vm.signatureHtml).toBe('<p>Jane Doe</p><p>Example Org<br>+1 555 0100</p>')
+
+		await wrapper.setData({ to: 'a@b.example' })
+		await wrapper.vm.send()
+
+		expect(sendMessage).toHaveBeenLastCalledWith(expect.objectContaining({
+			accountId: 1,
+			aliasId: 12,
+			fromEmail: 'hello@second.example',
+		}))
+	})
+
+	it('picks an address you already have instead of adding it twice', async () => {
+		await openForm()
+		await wrapper.setData({ newAddress: 'Support@Example.com' })
+
+		await wrapper.vm.addAddress()
+
+		expect(createAlias).not.toHaveBeenCalled()
+		expect(wrapper.vm.identityKey).toBe('l7')
+		expect(wrapper.vm.addingAddress).toBe(false)
+	})
+
+	it('asks for a full address', async () => {
+		await openForm()
+		await wrapper.setData({ newAddress: 'hello' })
+
+		await wrapper.vm.addAddress()
+
+		expect(createAlias).not.toHaveBeenCalled()
+		expect(wrapper.vm.addressNotice).toContain('full email address')
+	})
+
+	it('says so when Mail cannot add it, and keeps the sender', async () => {
+		createAlias.mockRejectedValueOnce(new Error('Request failed with status 500'))
+		await openForm()
+		await wrapper.setData({ newAddress: 'hello@second.example' })
+
+		await wrapper.vm.addAddress()
+
+		expect(wrapper.vm.addressNotice).toBe('Could not add hello@second.example. Try again, or add it in the full Mail app.')
+		expect(wrapper.vm.addingAddress).toBe(true)
+		expect(wrapper.vm.identityKey).toBe('a1')
+		expect(store.accounts[0].aliases).toHaveLength(1)
+	})
+
+	it('adds on Enter in the form, and never sends the message', async () => {
+		createAlias.mockResolvedValueOnce({ id: 12, name: 'Jane Doe', alias: 'hello@second.example', signature: null })
+		await openForm()
+		await wrapper.setData({ newAddress: 'hello@second.example', to: 'a@b.example' })
+
+		await wrapper.find('.composer__newaddr input[type="email"]').trigger('keydown.enter')
+
+		expect(createAlias).toHaveBeenCalledTimes(1)
+		expect(sendMessage).not.toHaveBeenCalled()
+	})
+
+	it('cancel closes the form and changes nothing', async () => {
+		await openForm()
+
+		await wrapper.find('.composer__newaddr-actions .composer__btn').trigger('click')
+
+		expect(wrapper.find('.composer__newaddr').exists()).toBe(false)
+		expect(createAlias).not.toHaveBeenCalled()
+		expect(wrapper.vm.identityKey).toBe('a1')
+	})
+
+	it('never adds an address to an account someone shared with you', async () => {
+		store.accounts.push({ id: 3, emailAddress: 'boss@example.com', name: 'Boss', isDelegated: true, aliases: [] })
+		await wrapper.setData({ identityKey: 'a3' })
+		await openForm()
+
+		// Only one own account: no account list, and it is the one used
+		expect(wrapper.find('.composer__newaddr select').exists()).toBe(false)
+		expect(wrapper.vm.newAddressAccountId).toBe(1)
+		expect(wrapper.vm.newAddressName).toBe('Jane Doe')
+	})
+
+	it('offers no "Add an address" when every account is shared with you', async () => {
+		const own = store.accounts.splice(0, 1, { id: 3, emailAddress: 'boss@example.com', name: 'Boss', isDelegated: true, aliases: [] })
+		const shared = shallowMount(Composer, { mocks: l10nMocks })
+		store.accounts.splice(0, 1, ...own)
+
+		expect(shared.findAll('.composer__select-wrap select option').wrappers.map((option) => option.text()))
+			.toEqual(['Boss <boss@example.com>'])
+	})
+
+	it('with several accounts, adds it to the account picked', async () => {
+		store.accounts.push({ id: 2, emailAddress: 'other@second.example', name: 'Jane at Second', aliases: [] })
+		createAlias.mockResolvedValueOnce({ id: 13, name: 'Jane at Second', alias: 'sales@second.example', signature: null })
+		await wrapper.vm.$nextTick()
+		await openForm()
+
+		await wrapper.find('.composer__newaddr select').setValue('2')
+		await wrapper.setData({ newAddress: 'sales@second.example' })
+		await wrapper.vm.addAddress()
+
+		expect(createAlias).toHaveBeenCalledWith(2, 'sales@second.example', 'Jane Doe')
+		expect(store.accounts[1].aliases.map((alias) => alias.id)).toEqual([13])
+		expect(wrapper.vm.selectedIdentity).toMatchObject({ accountId: 2, aliasId: 13 })
 	})
 })
 

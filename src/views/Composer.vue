@@ -5,25 +5,79 @@
 -->
 <template>
 	<form class="composer" @submit.prevent="send">
-		<!-- Always shown, so the sender is never a surprise; a box with an
-			arrow only when there is another address to pick -->
+		<!-- Always shown, so the sender is never a surprise. The last choice
+			adds another address to send from. -->
 		<label v-if="identities.length" class="composer__field">
 			<span class="composer__label">{{ t('mail_mobile', 'From') }}</span>
-			<span v-if="identities.length > 1" class="composer__select-wrap">
-				<select
-					v-model="identityKey"
-					class="composer__select"
-					@change="onIdentityChange">
+			<span class="composer__select-wrap">
+				<select v-model="fromChoice" class="composer__select">
 					<option
 						v-for="identity in identities"
 						:key="identity.key"
 						:value="identity.key">
 						{{ identityLabel(identity) }}
 					</option>
+					<option v-if="ownAccounts.length" :value="ADD_ADDRESS">
+						{{ t('mail_mobile', 'Add an address …') }}
+					</option>
 				</select>
 			</span>
-			<span v-else class="composer__from">{{ identityLabel(selectedIdentity) }}</span>
 		</label>
+		<div v-if="addingAddress" class="composer__newaddr">
+			<!-- Enter adds the address; it must never send the message -->
+			<label class="composer__field">
+				<span class="composer__label">{{ t('mail_mobile', 'Address') }}</span>
+				<input
+					ref="newAddressInput"
+					v-model="newAddress"
+					type="email"
+					inputmode="email"
+					autocapitalize="off"
+					autocomplete="off"
+					:placeholder="t('mail_mobile', 'name@example.com')"
+					@keydown.enter.prevent="addAddress">
+			</label>
+			<label class="composer__field">
+				<span class="composer__label">{{ t('mail_mobile', 'Name') }}</span>
+				<input
+					v-model="newAddressName"
+					type="text"
+					autocomplete="off"
+					:placeholder="t('mail_mobile', 'Shown with the address')"
+					@keydown.enter.prevent="addAddress">
+			</label>
+			<label v-if="ownAccounts.length > 1" class="composer__field">
+				<span class="composer__label">{{ t('mail_mobile', 'Account') }}</span>
+				<span class="composer__select-wrap">
+					<select v-model="newAddressAccountId" class="composer__select">
+						<option
+							v-for="account in ownAccounts"
+							:key="account.id"
+							:value="account.id">
+							{{ account.emailAddress }}
+						</option>
+					</select>
+				</span>
+			</label>
+			<p class="composer__newaddr-hint">
+				{{ t('mail_mobile', 'Mail will send from it through {account}. Your mail server must allow that account to send from this address.', { account: newAddressAccount ? newAddressAccount.emailAddress : '' }, AS_TEXT) }}
+			</p>
+			<div v-if="addressNotice" class="composer__notice">
+				{{ addressNotice }}
+			</div>
+			<div class="composer__newaddr-actions">
+				<button type="button" class="composer__btn" @click="cancelAddAddress">
+					{{ t('mail_mobile', 'Cancel') }}
+				</button>
+				<button
+					type="button"
+					class="composer__btn composer__btn--send"
+					:disabled="savingAddress"
+					@click="addAddress">
+					{{ savingAddress ? t('mail_mobile', 'Adding …') : t('mail_mobile', 'Add address') }}
+				</button>
+			</div>
+		</div>
 		<label
 			v-for="field in recipientFields"
 			:key="field.key"
@@ -213,13 +267,20 @@
 </template>
 
 <script>
-import { autocomplete, sendMessage, uploadAttachment } from '../api/mail.js'
+import { autocomplete, createAlias, sendMessage, uploadAttachment } from '../api/mail.js'
 import { AS_TEXT } from '../l10nText.js'
 import logger from '../logger.js'
 import { store } from '../store.js'
 
 // Keep well below common SMTP message-size limits (encoding adds ~35%)
 const MAX_TOTAL_BYTES = 25 * 1024 * 1024
+
+// The From list's last choice: add another address to send from. Real
+// choices are 'a' or 'l' followed by a number, so this cannot clash.
+const ADD_ADDRESS = '+add'
+
+// The same test the recipient fields use
+const EMAIL_PATTERN = /^[^@\s]+@[^@\s]+\.[^@\s]+$/
 
 /**
  * One selectable sender identity per account and per alias.
@@ -308,6 +369,14 @@ export default {
 			unsignedOk: false,
 			notice: null,
 			AS_TEXT,
+			ADD_ADDRESS,
+			// The "Add an address" form under the From line
+			addingAddress: false,
+			newAddress: '',
+			newAddressName: '',
+			newAddressAccountId: null,
+			savingAddress: false,
+			addressNotice: null,
 			suggestions: [],
 			suggestField: 'to',
 			suggestTimer: null,
@@ -325,8 +394,37 @@ export default {
 			return fields
 		},
 
+		// Addresses are added only to the person's own accounts, never to
+		// one someone shared with them (Mail would allow it, changing the
+		// owner's account)
+		ownAccounts() {
+			return store.accounts.filter((account) => !account.isDelegated)
+		},
+
+		// What the From list shows: the sender, or "Add an address" for a
+		// moment when that is picked
+		fromChoice: {
+			get() {
+				return this.identityKey
+			},
+
+			set(value) {
+				if (value === ADD_ADDRESS) {
+					this.openAddAddress()
+					// Show the current sender again until a new address exists
+					this.$forceUpdate()
+					return
+				}
+				this.pickIdentity(value)
+			},
+		},
+
 		identities() {
 			return buildIdentities(store.accounts)
+		},
+
+		newAddressAccount() {
+			return this.ownAccounts.find((account) => account.id === this.newAddressAccountId) ?? null
 		},
 
 		selectedIdentity() {
@@ -424,6 +522,11 @@ export default {
 			})
 		},
 
+		pickIdentity(key) {
+			this.identityKey = key
+			this.onIdentityChange()
+		},
+
 		onIdentityChange() {
 			// Sending as another identity should attach that identity's
 			// signature — unless the user picked one explicitly
@@ -431,6 +534,62 @@ export default {
 				return
 			}
 			this.signatureKey = this.selectedIdentity?.signature ? this.selectedIdentity.key : 'none'
+		},
+
+		openAddAddress() {
+			// Through the account now sending, with its name; the first own
+			// account when that one was shared with the person
+			const account = this.ownAccounts.find((candidate) => candidate.id === this.selectedIdentity?.accountId)
+				?? this.ownAccounts[0]
+			this.newAddressAccountId = account?.id ?? null
+			this.newAddressName = account?.name ?? ''
+			this.newAddress = ''
+			this.addressNotice = null
+			this.addingAddress = true
+			this.$nextTick(() => this.$refs.newAddressInput?.focus())
+		},
+
+		cancelAddAddress() {
+			this.addingAddress = false
+			this.addressNotice = null
+		},
+
+		async addAddress() {
+			if (this.savingAddress) {
+				return
+			}
+			const email = this.newAddress.trim()
+			if (!EMAIL_PATTERN.test(email)) {
+				this.addressNotice = this.t('mail_mobile', 'Enter a full email address, like name@example.com')
+				return
+			}
+			// Already one of the person's addresses: pick it. Mail would
+			// store a second copy rather than refuse it.
+			const existing = this.identities.find((identity) => identity.email?.toLowerCase() === email.toLowerCase())
+			if (existing) {
+				this.pickIdentity(existing.key)
+				this.addingAddress = false
+				return
+			}
+			const account = this.newAddressAccount
+			if (!account) {
+				return
+			}
+			this.savingAddress = true
+			this.addressNotice = null
+			try {
+				const alias = await createAlias(account.id, email, this.newAddressName.trim())
+				// The rest of the page (the From list, replies) reads the
+				// aliases from the store: add it there, as a reload would
+				this.$set(account, 'aliases', [...(account.aliases ?? []), alias])
+				this.pickIdentity('l' + alias.id)
+				this.addingAddress = false
+			} catch (error) {
+				logger.error('could not add an address to send from', error)
+				this.addressNotice = this.t('mail_mobile', 'Could not add {address}. Try again, or add it in the full Mail app.', { address: email }, AS_TEXT)
+			} finally {
+				this.savingAddress = false
+			}
 		},
 
 		recipientValue(field) {
@@ -728,16 +887,24 @@ export default {
 	outline: 2px solid var(--mob-accent);
 	outline-offset: 1px;
 }
-/* Only one address: shown as plain text, nothing to pick */
-.composer__from {
-	flex: 1;
-	min-width: 0;
-	padding: 8px 0;
-	font-size: 15px;
-	color: var(--mob-text);
-	overflow: hidden;
-	text-overflow: ellipsis;
-	white-space: nowrap;
+/* The "Add an address" form, set apart from the message fields */
+.composer__newaddr {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	padding: 10px 12px;
+	border: 1px solid var(--mob-border);
+	border-radius: var(--mob-radius);
+	background-color: var(--mob-hover);
+}
+.composer__newaddr-hint {
+	margin: 0;
+	font-size: 13px;
+	color: var(--mob-text-muted);
+}
+.composer__newaddr-actions {
+	display: flex;
+	gap: 8px;
 }
 .composer__field input {
 	flex: 1;
