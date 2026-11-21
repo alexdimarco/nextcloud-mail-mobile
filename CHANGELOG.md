@@ -6,7 +6,7 @@
 
 All notable changes to Mail Mobile are listed here.
 
-## 0.2.2 – not released yet
+## 0.2.2 – 21 November 2026
 
 - The From line is always shown when writing a message. With more than
   one address to send from, it is a box with a down arrow that lists
