@@ -233,6 +233,47 @@ describe('mobile Composer recipient suggestions', () => {
 		expect(wrapper.vm.signatureHtml).toBe('<p>Example Support</p>')
 	})
 
+	it('sends from the alias picked in the From list', async () => {
+		const { sendMessage } = await import('../../src/api/mail.js')
+		await wrapper.setData({ identityKey: 'l7', to: 'a@b.example' })
+
+		await wrapper.vm.send()
+
+		expect(sendMessage).toHaveBeenLastCalledWith(expect.objectContaining({
+			accountId: 1,
+			aliasId: 7,
+			fromEmail: 'support@example.com',
+		}))
+	})
+
+	it('starts a reply from the alias the mail was sent to, with its signature', async () => {
+		const { store } = await import('../../src/store.js')
+		const { sendMessage } = await import('../../src/api/mail.js')
+		store.composerPrefill = { accountId: 1, aliasId: 7, to: [{ email: 'alice@example.com' }], subject: 'Re: Hi' }
+		const replying = shallowMount(Composer, { mocks: l10nMocks })
+		store.composerPrefill = null
+
+		expect(replying.vm.identityKey).toBe('l7')
+		expect(replying.vm.signatureHtml).toBe('<p>Example Support</p>')
+
+		await replying.vm.send()
+
+		expect(sendMessage).toHaveBeenLastCalledWith(expect.objectContaining({
+			accountId: 1,
+			aliasId: 7,
+			fromEmail: 'support@example.com',
+		}))
+	})
+
+	it('starts from the account itself when the alias no longer exists', async () => {
+		const { store } = await import('../../src/store.js')
+		store.composerPrefill = { accountId: 1, aliasId: 99 }
+		const replying = shallowMount(Composer, { mocks: l10nMocks })
+		store.composerPrefill = null
+
+		expect(replying.vm.identityKey).toBe('a1')
+	})
+
 	it('keeps an explicitly picked signature when the sender changes', async () => {
 		await wrapper.setData({ signatureKey: 'none', signatureChosen: true, identityKey: 'l7' })
 

@@ -38,6 +38,10 @@ vi.mock('../../src/store.js', () => ({
 			id: 1,
 			emailAddress: 'me@example.com',
 			aliases: [{ id: 7, alias: 'support@example.com' }],
+		}, {
+			id: 2,
+			emailAddress: 'other@example.org',
+			aliases: [{ id: 8, alias: 'sales@example.org' }],
 		}],
 		currentEnvelope: null,
 		authError: null,
@@ -125,5 +129,81 @@ describe('mobile Reader reply and forward', () => {
 		wrapper.vm.forward()
 
 		expect(wrapper.emitted('forward')[0][0].forwardedHtml).toContain('&lt;script&gt;')
+	})
+})
+
+describe('mobile Reader answers from the address the mail was sent to', () => {
+	let wrapper
+
+	async function open(fields) {
+		const { fetchMessage } = await import('../../src/api/mail.js')
+		fetchMessage.mockResolvedValue({ ...message, ...fields })
+		wrapper = shallowMount(Reader, {
+			propsData: { messageId: 9 },
+			mocks: l10nMocks,
+		})
+		await wrapper.vm.$nextTick()
+		await wrapper.vm.$nextTick()
+	}
+
+	it('replies from the alias the mail was sent to', async () => {
+		await open({ to: [{ email: 'support@example.com' }], cc: [] })
+
+		wrapper.vm.reply()
+
+		expect(wrapper.emitted('reply')[0][0]).toMatchObject({ accountId: 1, aliasId: 7 })
+	})
+
+	it('replies from the account itself when the mail was sent to its main address', async () => {
+		// To has the main address first, Cc the alias: the main address wins
+		await open({})
+
+		wrapper.vm.reply()
+
+		expect(wrapper.emitted('reply')[0][0].aliasId).toBe(null)
+	})
+
+	it('finds the alias in Cc', async () => {
+		await open({ to: [{ email: 'bob@example.com' }], cc: [{ email: 'support@example.com' }] })
+
+		wrapper.vm.reply()
+
+		expect(wrapper.emitted('reply')[0][0].aliasId).toBe(7)
+	})
+
+	it('matches the alias whatever its letter case', async () => {
+		await open({ to: [{ email: 'Support@Example.COM' }], cc: [] })
+
+		wrapper.vm.reply()
+
+		expect(wrapper.emitted('reply')[0][0].aliasId).toBe(7)
+	})
+
+	it('never picks an alias of another account', async () => {
+		// The mail sits in account 1; sending as account 2's alias through
+		// account 1 would be refused or go out from the wrong server
+		await open({ to: [{ email: 'sales@example.org' }], cc: [] })
+
+		wrapper.vm.reply()
+
+		expect(wrapper.emitted('reply')[0][0]).toMatchObject({ accountId: 1, aliasId: null })
+	})
+
+	it('uses the account itself when none of its addresses is visible (Bcc)', async () => {
+		await open({ to: [{ email: 'list@lists.example.net' }], cc: [] })
+
+		wrapper.vm.reply()
+
+		expect(wrapper.emitted('reply')[0][0].aliasId).toBe(null)
+	})
+
+	it('replies to all and forwards from the alias too', async () => {
+		await open({ to: [{ email: 'support@example.com' }, { email: 'bob@example.com' }], cc: [] })
+
+		wrapper.vm.replyAll()
+		wrapper.vm.forward()
+
+		expect(wrapper.emitted('reply')[0][0].aliasId).toBe(7)
+		expect(wrapper.emitted('forward')[0][0].aliasId).toBe(7)
 	})
 })

@@ -141,6 +141,25 @@ describe('sending', () => {
 		expect(axiosMock.post).toHaveBeenNthCalledWith(2, '/index.php/apps/mail/api/outbox/42')
 	})
 
+	it('gives the outbox the alias to send from', async () => {
+		axiosMock.post
+			.mockResolvedValueOnce({ data: { data: { id: 42 } } })
+			.mockResolvedValueOnce({ data: {} })
+		await sendMessage({ ...MESSAGE, aliasId: 7, fromEmail: 'support@example.com' })
+		expect(axiosMock.post).toHaveBeenNthCalledWith(1, '/index.php/apps/mail/api/outbox', expect.objectContaining({
+			accountId: 1,
+			aliasId: 7,
+		}))
+	})
+
+	it('sends from the account itself when no alias is given', async () => {
+		axiosMock.post
+			.mockResolvedValueOnce({ data: { data: { id: 42 } } })
+			.mockResolvedValueOnce({ data: {} })
+		await sendMessage(MESSAGE)
+		expect(axiosMock.post.mock.calls[0][1].aliasId).toBe(null)
+	})
+
 	it('falls back to Mail\'s public send route when the outbox rejects the fields', async () => {
 		axiosMock.post
 			.mockRejectedValueOnce(httpError(400))

@@ -270,7 +270,10 @@ export default {
 		const prefill = store.composerPrefill ?? {}
 		const accountId = prefill.accountId ?? store.accounts[0]?.id
 		const identities = buildIdentities(store.accounts)
-		const initial = identities.find((identity) => identity.accountId === accountId && identity.aliasId === null)
+		// A reply or forward starts from the alias the mail was sent to;
+		// anything else, or an alias since removed, from the account itself
+		const initial = identities.find((identity) => identity.accountId === accountId && identity.aliasId === (prefill.aliasId ?? null))
+			?? identities.find((identity) => identity.accountId === accountId && identity.aliasId === null)
 			?? identities[0]
 		return {
 			accountId,

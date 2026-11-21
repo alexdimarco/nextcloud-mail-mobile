@@ -43,6 +43,11 @@ Works with Mail 6 as well as Mail 5.13.
   CI runs with install scripts and Composer plugins off.
 - scripts/check-mail-routes.py refuses any server that is not on the same
   machine.
+- Reply, reply all and forward start from the alias the mail was sent to,
+  with that alias's signature, instead of always from the account's main
+  address. The first of the account's own addresses in To, then Cc,
+  decides; when none is visible (Bcc, a mailing list) it stays the main
+  address. The From list can still change it.
 
 ## 0.1.0 – not released
 
