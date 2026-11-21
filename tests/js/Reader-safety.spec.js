@@ -6,6 +6,7 @@
 import { mount } from '@vue/test-utils'
 import { describe, expect, it, vi } from 'vitest'
 import Reader, { htmlToText, linkify } from '../../src/views/Reader.vue'
+import { forgetEverything } from '../../src/memory.js'
 import { l10nMocks } from './l10n.js'
 
 vi.mock('../../src/api/mail.js', () => ({
@@ -33,6 +34,7 @@ const base = {
 }
 
 async function open(message) {
+	forgetEverything()
 	const { fetchMessage } = await import('../../src/api/mail.js')
 	fetchMessage.mockResolvedValue(message)
 	const wrapper = mount(Reader, {

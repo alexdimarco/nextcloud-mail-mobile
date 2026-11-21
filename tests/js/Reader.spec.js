@@ -7,6 +7,7 @@
 import { shallowMount } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import Reader from '../../src/views/Reader.vue'
+import { forgetEverything } from '../../src/memory.js'
 import { l10nMocks } from './l10n.js'
 
 const message = {
@@ -45,6 +46,7 @@ vi.mock('../../src/store.js', () => ({
 		}],
 		currentEnvelope: null,
 		authError: null,
+		offline: false,
 	},
 	accountFor: () => ({ trashMailboxId: 3 }),
 	findMailbox: () => ({ databaseId: 2, accountId: 1 }),
@@ -54,6 +56,7 @@ describe('mobile Reader reply and forward', () => {
 	let wrapper
 
 	beforeEach(async () => {
+		forgetEverything()
 		const { fetchMessage } = await import('../../src/api/mail.js')
 		fetchMessage.mockResolvedValue({ ...message })
 		wrapper = shallowMount(Reader, {
@@ -136,6 +139,7 @@ describe('mobile Reader answers from the address the mail was sent to', () => {
 	let wrapper
 
 	async function open(fields) {
+		forgetEverything()
 		const { fetchMessage } = await import('../../src/api/mail.js')
 		fetchMessage.mockResolvedValue({ ...message, ...fields })
 		wrapper = shallowMount(Reader, {
@@ -205,5 +209,75 @@ describe('mobile Reader answers from the address the mail was sent to', () => {
 
 		expect(wrapper.emitted('reply')[0][0].aliasId).toBe(7)
 		expect(wrapper.emitted('forward')[0][0].aliasId).toBe(7)
+	})
+})
+
+describe('mobile Reader on a slow or dead connection', () => {
+	let api
+	let store
+
+	async function mountReader(messageId) {
+		const wrapper = shallowMount(Reader, { propsData: { messageId }, mocks: l10nMocks })
+		for (let i = 0; i < 4; i++) {
+			await Promise.resolve()
+		}
+		await wrapper.vm.$nextTick()
+		return wrapper
+	}
+
+	beforeEach(async () => {
+		forgetEverything()
+		api = await import('../../src/api/mail.js')
+		;({ store } = await import('../../src/store.js'))
+		api.fetchMessage.mockReset()
+		store.offline = false
+	})
+
+	it('shows a message opened earlier in the visit at once, before Mail answers', async () => {
+		api.fetchMessage.mockResolvedValueOnce({ ...message })
+		;(await mountReader(9)).destroy()
+		api.fetchMessage.mockReturnValueOnce(new Promise(() => {}))
+
+		const again = shallowMount(Reader, { propsData: { messageId: 9 }, mocks: l10nMocks })
+
+		expect(again.text()).toContain('Quarterly numbers')
+		expect(again.text()).not.toContain('Loading')
+	})
+
+	it('keeps showing that copy when the connection drops', async () => {
+		api.fetchMessage.mockResolvedValueOnce({ ...message })
+		;(await mountReader(9)).destroy()
+		store.offline = true
+		api.fetchMessage.mockRejectedValueOnce({ code: 'ERR_NETWORK' })
+
+		const again = await mountReader(9)
+
+		expect(again.text()).toContain('Quarterly numbers')
+		expect(again.vm.error).toBe(null)
+	})
+
+	it('says there is no connection and offers to try again', async () => {
+		store.offline = true
+		api.fetchMessage.mockRejectedValueOnce({ code: 'ERR_NETWORK' })
+
+		const reader = await mountReader(11)
+
+		expect(reader.text()).toContain('No connection to the server, so this message could not be loaded.')
+		api.fetchMessage.mockResolvedValueOnce({ ...message })
+		await reader.find('.reader__retry').trigger('click')
+		for (let i = 0; i < 4; i++) {
+			await Promise.resolve()
+		}
+		await reader.vm.$nextTick()
+		expect(reader.text()).toContain('Quarterly numbers')
+	})
+
+	it('tries again when the page asks it to', async () => {
+		api.fetchMessage.mockResolvedValue({ ...message })
+		const reader = await mountReader(9)
+
+		await reader.setProps({ refreshTick: 1 })
+
+		expect(api.fetchMessage).toHaveBeenCalledTimes(2)
 	})
 })

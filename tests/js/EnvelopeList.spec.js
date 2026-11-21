@@ -5,8 +5,9 @@
  */
 
 import { shallowMount } from '@vue/test-utils'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import EnvelopeList from '../../src/views/EnvelopeList.vue'
+import { forgetEverything, recallList } from '../../src/memory.js'
 import { l10nMocks } from './l10n.js'
 
 function envelope(id, overrides = {}) {
@@ -77,13 +78,14 @@ describe('mobile EnvelopeList selection, swipe and move', () => {
 
 	beforeEach(async () => {
 		vi.clearAllMocks()
+		forgetEverything()
 		storeMock.threaded = false
 		const { fetchEnvelopes } = await import('../../src/api/mail.js')
 		fetchEnvelopes.mockResolvedValue(ENVELOPES.map((item) => ({ ...item, flags: { ...item.flags } })))
 		wrapper = await mountWith()
 	})
 
-	it('syncs the mailbox from IMAP before reading the cache on refresh', async () => {
+	it('shows the list Mail already has first, then checks for new mail and reads it again', async () => {
 		const { syncMailbox, fetchEnvelopes } = await import('../../src/api/mail.js')
 		syncMailbox.mockClear()
 		fetchEnvelopes.mockClear()
@@ -91,7 +93,12 @@ describe('mobile EnvelopeList selection, swipe and move', () => {
 		await wrapper.vm.refresh()
 
 		expect(syncMailbox).toHaveBeenCalledWith(INBOX.databaseId)
+		expect(fetchEnvelopes).toHaveBeenCalledTimes(2)
 		expect(fetchEnvelopes).toHaveBeenCalledWith(INBOX.databaseId, undefined, false)
+		const [firstRead, secondRead] = fetchEnvelopes.mock.invocationCallOrder
+		const [check] = syncMailbox.mock.invocationCallOrder
+		expect(firstRead).toBeLessThan(check)
+		expect(check).toBeLessThan(secondRead)
 	})
 
 	it('still shows cached messages when the sync fails', async () => {
@@ -318,6 +325,7 @@ describe('mobile EnvelopeList threaded (conversation) view', () => {
 
 	beforeEach(() => {
 		vi.clearAllMocks()
+		forgetEverything()
 		storeMock.threaded = true
 	})
 
@@ -414,5 +422,211 @@ describe('mobile EnvelopeList threaded (conversation) view', () => {
 		// child rows and expanded headers never get the collapsed-row chevron
 		expect(view.vm.isConversation({ envelope: reply, child: true, header: false })).toBe(false)
 		expect(view.vm.isConversation({ envelope: reply, child: false, header: true })).toBe(false)
+	})
+})
+
+describe('mobile EnvelopeList on a slow or dead connection', () => {
+	const NO_ANSWER = { code: 'ERR_NETWORK', message: 'Network Error' }
+
+	function fresh(ids) {
+		return ids.map((id) => envelope(id))
+	}
+
+	async function mount(options = {}) {
+		const instance = shallowMount(EnvelopeList, {
+			propsData: { mailbox: INBOX },
+			mocks: l10nMocks,
+			...options,
+		})
+		instance.vm.wait = () => Promise.resolve()
+		await flush()
+		return instance
+	}
+
+	async function flush() {
+		for (let i = 0; i < 6; i++) {
+			await Promise.resolve()
+		}
+	}
+
+	let api
+
+	beforeEach(async () => {
+		vi.clearAllMocks()
+		forgetEverything()
+		storeMock.threaded = false
+		api = await import('../../src/api/mail.js')
+		api.fetchEnvelopes.mockReset()
+		api.syncMailbox.mockReset()
+		api.syncMailbox.mockResolvedValue(undefined)
+		api.fetchEnvelopes.mockResolvedValue(fresh([101, 102, 103]))
+	})
+
+	afterEach(() => {
+		vi.useRealTimers()
+	})
+
+	it('shows the list from earlier in the visit at once, before Mail answers', async () => {
+		const first = await mount()
+		first.destroy()
+		api.fetchEnvelopes.mockReturnValue(new Promise(() => {}))
+
+		const again = shallowMount(EnvelopeList, { propsData: { mailbox: INBOX }, mocks: l10nMocks })
+
+		expect(again.vm.envelopes.map((item) => item.databaseId)).toEqual([101, 102, 103])
+		expect(again.text()).not.toContain('Loading')
+	})
+
+	it('does not check for new mail when Mail did not answer, and offers to try again', async () => {
+		api.fetchEnvelopes.mockRejectedValueOnce(NO_ANSWER)
+
+		const list = await mount()
+
+		expect(api.syncMailbox).not.toHaveBeenCalled()
+		expect(list.text()).toContain('Could not load the messages.')
+		expect(list.text()).not.toContain('No messages')
+
+		await list.find('.list__retry').trigger('click')
+		await flush()
+		expect(list.vm.envelopes.map((item) => item.databaseId)).toEqual([101, 102, 103])
+		expect(list.find('.list__retry').exists()).toBe(false)
+	})
+
+	it('still checks for new mail when Mail answers with an error (a folder it never read)', async () => {
+		api.fetchEnvelopes
+			.mockRejectedValueOnce({ response: { status: 428 } })
+			.mockResolvedValueOnce(fresh([101]))
+
+		const list = await mount()
+
+		expect(api.syncMailbox).toHaveBeenCalledWith(INBOX.databaseId)
+		expect(list.vm.envelopes.map((item) => item.databaseId)).toEqual([101])
+	})
+
+	it('says "Loading", not "Could not load", while Mail fills a folder it never read', async () => {
+		let finishCheck
+		api.syncMailbox.mockReturnValue(new Promise((resolve) => {
+			finishCheck = resolve
+		}))
+		api.fetchEnvelopes
+			.mockRejectedValueOnce({ response: { status: 428 } })
+			.mockResolvedValueOnce(fresh([101]))
+
+		const list = await mount()
+		await list.vm.$nextTick()
+		expect(list.text()).toContain('Loading')
+		expect(list.text()).not.toContain('Could not load')
+
+		finishCheck()
+		await flush()
+		await list.vm.$nextTick()
+		expect(list.vm.envelopes.map((item) => item.databaseId)).toEqual([101])
+	})
+
+	it('says it could not load when both reading and checking failed', async () => {
+		api.fetchEnvelopes.mockRejectedValueOnce({ response: { status: 500 } })
+		api.syncMailbox.mockRejectedValueOnce({ response: { status: 500 } })
+
+		const list = await mount()
+		await list.vm.$nextTick()
+
+		expect(list.text()).toContain('Could not load the messages.')
+	})
+
+	it('keeps what is on screen when the connection drops', async () => {
+		const list = await mount()
+		api.fetchEnvelopes.mockRejectedValueOnce(NO_ANSWER)
+
+		await list.vm.refresh()
+
+		expect(list.vm.envelopes.map((item) => item.databaseId)).toEqual([101, 102, 103])
+		expect(list.vm.loadFailed).toBe(false)
+	})
+
+	it('a background update keeps the selection, minus messages that are gone', async () => {
+		const list = await mount()
+		list.vm.toggleSelection(101)
+		list.vm.toggleSelection(103)
+		api.fetchEnvelopes.mockResolvedValue(fresh([100, 101, 102]))
+
+		await list.vm.refresh()
+
+		expect(list.vm.envelopes.map((item) => item.databaseId)).toEqual([100, 101, 102])
+		expect(list.vm.selection).toEqual([101])
+		expect(list.vm.selectionMode).toBe(true)
+	})
+
+	it('keeps older messages loaded with "Load more" when the first page is updated', async () => {
+		const page = (from) => Array.from({ length: 25 }, (_, i) => envelope(from + i, { dateInt: 2000 - from - i }))
+		api.fetchEnvelopes.mockResolvedValue(page(1))
+		const list = await mount()
+		api.fetchEnvelopes.mockResolvedValueOnce(page(26))
+		await list.vm.loadMore()
+		expect(list.vm.envelopes).toHaveLength(50)
+
+		api.fetchEnvelopes.mockResolvedValue(page(1))
+		await list.vm.refresh()
+
+		expect(list.vm.envelopes).toHaveLength(50)
+	})
+
+	it('an older, slower refresh never overwrites a newer one', async () => {
+		const list = await mount()
+		let answerSlow
+		api.fetchEnvelopes.mockReturnValueOnce(new Promise((resolve) => {
+			answerSlow = resolve
+		}))
+		const slow = list.vm.refresh()
+		api.fetchEnvelopes.mockResolvedValue(fresh([104]))
+		await list.vm.refresh()
+
+		answerSlow(fresh([101]))
+		await slow
+
+		expect(list.vm.envelopes.map((item) => item.databaseId)).toEqual([104])
+	})
+
+	it('says it is checking for new mail only when that takes a while', async () => {
+		vi.useFakeTimers()
+		let finishCheck
+		api.syncMailbox.mockReturnValue(new Promise((resolve) => {
+			finishCheck = resolve
+		}))
+		const list = await mount()
+		expect(list.text()).not.toContain('Checking for new mail')
+
+		vi.advanceTimersByTime(1600)
+		await list.vm.$nextTick()
+		expect(list.text()).toContain('Checking for new mail')
+
+		finishCheck()
+		await flush()
+		await list.vm.$nextTick()
+		expect(list.text()).not.toContain('Checking for new mail')
+	})
+
+	it('comes back to the same place in the list after reading a message', async () => {
+		const scroller = document.createElement('div')
+		scroller.style.overflowY = 'auto'
+		const host = document.createElement('div')
+		scroller.appendChild(host)
+		document.body.appendChild(scroller)
+		Object.defineProperty(scroller, 'scrollTop', { value: 240, writable: true })
+		const list = await mount({ attachTo: host })
+
+		list.vm.onRowClick({ envelope: list.vm.envelopes[1], child: false, header: false }, { preventDefault() {} })
+		expect(recallList(INBOX.databaseId, false).scrollTop).toBe(240)
+		list.destroy()
+
+		const back = document.createElement('div')
+		back.style.overflowY = 'auto'
+		const backHost = document.createElement('div')
+		back.appendChild(backHost)
+		document.body.appendChild(back)
+		Object.defineProperty(back, 'scrollTop', { value: 0, writable: true })
+		await mount({ attachTo: backHost })
+		await Promise.resolve()
+
+		expect(back.scrollTop).toBe(240)
 	})
 })

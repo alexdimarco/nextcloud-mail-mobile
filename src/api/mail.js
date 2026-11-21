@@ -26,6 +26,52 @@ export const page = {
 	reload: () => window.location.reload(),
 }
 
+// Time limits, so a slow or dead connection never leaves the page waiting
+// for good. Reads and small changes: 20 seconds. Asking Mail to check the
+// mail server for new mail runs in the background and can take long on a
+// big folder: 2 minutes. Sending also waits for the mail server: 2
+// minutes. Uploading a large file on a slow connection: 10 minutes.
+export const TIME_LIMIT_MS = 20_000
+export const SYNC_TIME_LIMIT_MS = 120_000
+export const SEND_TIME_LIMIT_MS = 120_000
+export const UPLOAD_TIME_LIMIT_MS = 600_000
+const SUGGEST_TIME_LIMIT_MS = 10_000
+
+/**
+ * Whether the server never answered: no connection, or no answer within
+ * the time limit. False when it answered, even with an error.
+ *
+ * @param {object} error the axios error
+ * @return {boolean} whether no answer came
+ */
+export function isNoAnswer(error) {
+	if (!error || error.response) {
+		return false
+	}
+	return ['ECONNABORTED', 'ETIMEDOUT', 'ERR_NETWORK'].includes(error.code)
+		|| error.message === 'Network Error'
+}
+
+/**
+ * Every call to Mail goes through here: with a time limit, and noting in
+ * the store that the connection works when an answer arrives.
+ *
+ * @param {function(object): Promise<object>} request makes the call, given the default options
+ * @return {Promise<object>} axios's response
+ */
+async function call(request) {
+	const resp = await request({ timeout: TIME_LIMIT_MS })
+	store.offline = false
+	return resp
+}
+
+const http = {
+	get: (url, options = {}) => call((defaults) => axios.get(url, { ...defaults, ...options })),
+	post: (url, data, options = {}) => call((defaults) => axios.post(url, data, { ...defaults, ...options })),
+	put: (url, data, options = {}) => call((defaults) => axios.put(url, data, { ...defaults, ...options })),
+	delete: (url, options = {}) => call((defaults) => axios.delete(url, { ...defaults, ...options })),
+}
+
 /**
  * @param {string} key the storage key
  * @return {string|null} the stored value, null if unavailable
@@ -124,6 +170,8 @@ export function isMailLoginError(error) {
  * @param {object} error the axios error
  */
 function handleError(error) {
+	// The page says so, and keeps showing what it already loaded
+	store.offline = isNoAnswer(error)
 	const response = error.response
 	if (response && response.status === 401) {
 		reauthenticate()
@@ -148,7 +196,7 @@ function handleError(error) {
 export async function fetchAccounts() {
 	let resp
 	try {
-		resp = await axios.get(generateUrl('/apps/mail/api/accounts'))
+		resp = await http.get(generateUrl('/apps/mail/api/accounts'))
 	} catch (error) {
 		handleError(error)
 	}
@@ -167,7 +215,7 @@ export async function fetchAccounts() {
  */
 export async function fetchMailboxes(accountId) {
 	try {
-		const resp = await axios.get(generateUrl('/apps/mail/api/mailboxes'), { params: { accountId } })
+		const resp = await http.get(generateUrl('/apps/mail/api/mailboxes'), { params: { accountId } })
 		return resp.data?.mailboxes ?? []
 	} catch (error) {
 		handleError(error)
@@ -188,7 +236,7 @@ export async function syncMailbox(mailboxId) {
 	try {
 		// 202 (sync accepted but not finished) still resolves; the caller
 		// reads the partly updated cache anyway
-		await axios.post(url, body)
+		await http.post(url, body, { timeout: SYNC_TIME_LIMIT_MS })
 	} catch (error) {
 		// The mailbox has no cache yet (new account or cleared cache): a
 		// full first sync is needed before quick syncs work. Mail answers
@@ -197,7 +245,7 @@ export async function syncMailbox(mailboxId) {
 		const status = error.response?.status
 		if (status === 428 || status === 412) {
 			try {
-				await axios.post(url, { ...body, init: true })
+				await http.post(url, { ...body, init: true }, { timeout: SYNC_TIME_LIMIT_MS })
 			} catch (initError) {
 				handleError(initError)
 			}
@@ -217,7 +265,7 @@ export async function fetchEnvelopes(mailboxId, cursor, threaded = false) {
 		params.cursor = cursor
 	}
 	try {
-		const resp = await axios.get(generateUrl('/apps/mail/api/messages'), { params })
+		const resp = await http.get(generateUrl('/apps/mail/api/messages'), { params })
 		store.authError = null
 		return resp.data
 	} catch (error) {
@@ -254,7 +302,7 @@ export function looksLikeConversation(envelope) {
  */
 export async function fetchThread(id) {
 	try {
-		const resp = await axios.get(generateUrl('/apps/mail/api/messages/{id}/thread', { id }))
+		const resp = await http.get(generateUrl('/apps/mail/api/messages/{id}/thread', { id }))
 		return resp.data ?? []
 	} catch (error) {
 		// A lone message has no thread (404): treat it as a single message
@@ -267,7 +315,7 @@ export async function fetchThread(id) {
 
 export async function fetchMessage(id) {
 	try {
-		const resp = await axios.get(generateUrl('/apps/mail/api/messages/{id}/body', { id }))
+		const resp = await http.get(generateUrl('/apps/mail/api/messages/{id}/body', { id }))
 		store.authError = null
 		return resp.data
 	} catch (error) {
@@ -281,7 +329,7 @@ export function htmlBodyUrl(id) {
 
 export async function setFlags(id, flags) {
 	try {
-		await axios.put(generateUrl('/apps/mail/api/messages/{id}/flags', { id }), { flags })
+		await http.put(generateUrl('/apps/mail/api/messages/{id}/flags', { id }), { flags })
 	} catch (error) {
 		handleError(error)
 	}
@@ -289,7 +337,7 @@ export async function setFlags(id, flags) {
 
 export async function deleteMessage(id) {
 	try {
-		await axios.delete(generateUrl('/apps/mail/api/messages/{id}', { id }))
+		await http.delete(generateUrl('/apps/mail/api/messages/{id}', { id }))
 	} catch (error) {
 		handleError(error)
 	}
@@ -297,7 +345,7 @@ export async function deleteMessage(id) {
 
 export async function moveMessage(id, destFolderId) {
 	try {
-		await axios.post(generateUrl('/apps/mail/api/messages/{id}/move', { id }), { destFolderId })
+		await http.post(generateUrl('/apps/mail/api/messages/{id}/move', { id }), { destFolderId })
 	} catch (error) {
 		handleError(error)
 	}
@@ -312,7 +360,7 @@ export async function moveMessage(id, destFolderId) {
  * @return {Promise<Array>} suggestions with label and email
  */
 export async function autocomplete(term) {
-	const resp = await axios.get(generateUrl('/apps/mail/api/autoComplete'), { params: { term } })
+	const resp = await http.get(generateUrl('/apps/mail/api/autoComplete'), { params: { term }, timeout: SUGGEST_TIME_LIMIT_MS })
 	return resp.data
 }
 
@@ -320,7 +368,8 @@ export async function uploadAttachment(file, onProgress) {
 	const data = new FormData()
 	data.append('attachment', file)
 	try {
-		const resp = await axios.post(generateUrl('/apps/mail/api/attachments'), data, {
+		const resp = await http.post(generateUrl('/apps/mail/api/attachments'), data, {
+			timeout: UPLOAD_TIME_LIMIT_MS,
 			onUploadProgress: (prog) => onProgress && onProgress(prog.loaded, prog.total),
 		})
 		return resp.data
@@ -337,7 +386,7 @@ export async function uploadAttachment(file, onProgress) {
  * @param {object} payload the message, as for sendMessage()
  */
 async function sendViaPublicRoute(payload) {
-	await axios.post(generateOcsUrl('/apps/mail/message/send'), {
+	await http.post(generateOcsUrl('/apps/mail/message/send'), {
 		accountId: payload.accountId,
 		fromEmail: payload.fromEmail,
 		subject: payload.subject,
@@ -346,7 +395,7 @@ async function sendViaPublicRoute(payload) {
 		to: payload.to,
 		cc: payload.cc ?? [],
 		bcc: payload.bcc ?? [],
-	}, { headers: { 'OCS-APIRequest': 'true' } })
+	}, { headers: { 'OCS-APIRequest': 'true' }, timeout: SEND_TIME_LIMIT_MS })
 }
 
 export async function sendMessage(payload) {
@@ -375,7 +424,7 @@ export async function sendMessage(payload) {
 	}
 	let created
 	try {
-		created = await axios.post(generateUrl('/apps/mail/api/outbox'), body)
+		created = await http.post(generateUrl('/apps/mail/api/outbox'), body, { timeout: SEND_TIME_LIMIT_MS })
 	} catch (error) {
 		// Only when the outbox did not take the message at all: a fallback
 		// after it was stored could send it twice
@@ -396,7 +445,7 @@ export async function sendMessage(payload) {
 	}
 	try {
 		const localId = created.data?.data?.id
-		await axios.post(generateUrl('/apps/mail/api/outbox/{id}', { id: localId }))
+		await http.post(generateUrl('/apps/mail/api/outbox/{id}', { id: localId }), undefined, { timeout: SEND_TIME_LIMIT_MS })
 	} catch (error) {
 		handleError(error)
 	}

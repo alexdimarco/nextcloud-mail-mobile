@@ -6,6 +6,26 @@
 
 All notable changes to Mail Mobile are listed here.
 
+## 0.3.0 – not released yet
+
+- On a slow or dead connection the page no longer waits for good:
+  - Every call to Mail has a time limit: 20 seconds for reading and small
+    changes, 2 minutes for sending and for checking the mail server for
+    new mail, 10 minutes for uploading a file. When it runs out, or there
+    is no connection, a banner says so, keeps what was already loaded on
+    screen, and offers Try again.
+  - A folder shows the list Mail already has at once, then checks the
+    mail server for new mail in the background ("Checking for new mail …"
+    only when that takes more than a second and a half). Before, the list
+    stayed empty until that check finished.
+  - Going back from a message shows the list straight away, at the same
+    place, and a message opened earlier shows at once while the newest
+    copy loads. Up to 10 lists and 20 messages are kept, in memory only:
+    nothing is saved on the phone, and a reload forgets them.
+  - A message that could not be loaded says why and offers Try again; a
+    send with no answer says the message may still go out, so it is not
+    sent twice.
+
 ## 0.2.2 – 21 November 2026
 
 - The From line is always shown when writing a message. With more than

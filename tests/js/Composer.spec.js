@@ -386,6 +386,24 @@ describe('mobile Composer recipient suggestions', () => {
 	})
 })
 
+describe('mobile Composer when sending gets no answer', () => {
+	it('says the message may still go out, so it is not sent twice', async () => {
+		const { store } = await import('../../src/store.js')
+		const { sendMessage } = await import('../../src/api/mail.js')
+		sendMessage.mockImplementationOnce(() => {
+			store.offline = true
+			return Promise.reject(new Error('timeout of 120000ms exceeded'))
+		})
+		const wrapper = shallowMount(Composer, { mocks: l10nMocks })
+		await wrapper.setData({ to: 'a@b.example' })
+
+		await wrapper.vm.send()
+		store.offline = false
+
+		expect(wrapper.vm.notice).toBe('No answer from the server. The message may still go out: look in Sent before sending it again.')
+	})
+})
+
 describe('mobile Composer From row', () => {
 	it('shows a list to pick from when there are several addresses', () => {
 		const wrapper = shallowMount(Composer, { mocks: l10nMocks })

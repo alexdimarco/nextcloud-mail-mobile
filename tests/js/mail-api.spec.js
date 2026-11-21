@@ -8,12 +8,18 @@ import {
 	autocomplete,
 	fetchMailboxes,
 	isMailLoginError,
+	isNoAnswer,
 	looksLikeConversation,
 	page,
 	REAUTH_ATTEMPT_KEY,
 	reauthenticate,
+	SEND_TIME_LIMIT_MS,
 	sendMessage,
+	SYNC_TIME_LIMIT_MS,
 	syncMailbox,
+	TIME_LIMIT_MS,
+	UPLOAD_TIME_LIMIT_MS,
+	uploadAttachment,
 } from '../../src/api/mail.js'
 
 const axiosMock = vi.hoisted(() => ({
@@ -24,7 +30,7 @@ const axiosMock = vi.hoisted(() => ({
 }))
 vi.mock('@nextcloud/axios', () => ({ default: axiosMock }))
 
-const storeMock = vi.hoisted(() => ({ authError: null }))
+const storeMock = vi.hoisted(() => ({ authError: null, offline: false }))
 vi.mock('../../src/store.js', () => ({ store: storeMock }))
 
 function httpError(status, data = {}) {
@@ -68,6 +74,21 @@ describe('Mail error handling', () => {
 	})
 })
 
+describe('telling "no answer" from an error answer', () => {
+	it('counts no connection and a time limit running out', () => {
+		expect(isNoAnswer({ code: 'ERR_NETWORK', message: 'Network Error' })).toBe(true)
+		expect(isNoAnswer({ code: 'ECONNABORTED', message: 'timeout of 20000ms exceeded' })).toBe(true)
+		expect(isNoAnswer({ code: 'ETIMEDOUT' })).toBe(true)
+	})
+
+	it('does not count an answer, even an error one, or a cancelled call', () => {
+		expect(isNoAnswer(httpError(500))).toBe(false)
+		expect(isNoAnswer(httpError(404))).toBe(false)
+		expect(isNoAnswer({ code: 'ERR_CANCELED', message: 'canceled' })).toBe(false)
+		expect(isNoAnswer(null)).toBe(false)
+	})
+})
+
 describe('conversation hint', () => {
 	it('marks a reply as part of a conversation', () => {
 		expect(looksLikeConversation({ messageId: '<b@x>', threadRootId: '<a@x>' })).toBe(true)
@@ -92,7 +113,7 @@ describe('calls to Mail', () => {
 	it('loads mailboxes from Mail\'s mailbox list', async () => {
 		axiosMock.get.mockResolvedValueOnce({ data: { id: 1, mailboxes: [{ databaseId: 2 }] } })
 		await expect(fetchMailboxes(1)).resolves.toEqual([{ databaseId: 2 }])
-		expect(axiosMock.get).toHaveBeenCalledWith('/index.php/apps/mail/api/mailboxes', { params: { accountId: 1 } })
+		expect(axiosMock.get).toHaveBeenCalledWith('/index.php/apps/mail/api/mailboxes', { params: { accountId: 1 }, timeout: TIME_LIMIT_MS })
 	})
 
 	it('runs a full first sync when Mail says the mailbox is not cached yet (428)', async () => {
@@ -101,7 +122,7 @@ describe('calls to Mail', () => {
 		await expect(syncMailbox(7)).resolves.toBeUndefined()
 		expect(axiosMock.post).toHaveBeenCalledTimes(2)
 		expect(axiosMock.post.mock.calls[0][1].init).toBe(false)
-		expect(axiosMock.post.mock.calls[1]).toEqual(['/index.php/apps/mail/api/mailboxes/7/sync', expect.objectContaining({ init: true })])
+		expect(axiosMock.post.mock.calls[1]).toEqual(['/index.php/apps/mail/api/mailboxes/7/sync', expect.objectContaining({ init: true }), { timeout: SYNC_TIME_LIMIT_MS }])
 	})
 
 	it('reports a failed first sync like any other error', async () => {
@@ -113,7 +134,34 @@ describe('calls to Mail', () => {
 	it('uses Mail\'s general address search for suggestions', async () => {
 		axiosMock.get.mockResolvedValueOnce({ data: [{ label: 'Sam', email: 'sam@example.com' }] })
 		await autocomplete('sa')
-		expect(axiosMock.get).toHaveBeenCalledWith('/index.php/apps/mail/api/autoComplete', { params: { term: 'sa' } })
+		expect(axiosMock.get).toHaveBeenCalledWith('/index.php/apps/mail/api/autoComplete', { params: { term: 'sa' }, timeout: 10_000 })
+	})
+
+	it('notes in the store when Mail does not answer, and clears it on the next answer', async () => {
+		axiosMock.get.mockRejectedValueOnce({ code: 'ECONNABORTED', message: 'timeout of 20000ms exceeded' })
+		await expect(fetchMailboxes(1)).rejects.toBeTruthy()
+		expect(storeMock.offline).toBe(true)
+
+		axiosMock.get.mockResolvedValueOnce({ data: { mailboxes: [] } })
+		await fetchMailboxes(1)
+		expect(storeMock.offline).toBe(false)
+	})
+
+	it('an error answer means the connection works', async () => {
+		storeMock.offline = true
+		axiosMock.get.mockRejectedValueOnce(httpError(500, { status: 'error', message: 'Server error' }))
+		await expect(fetchMailboxes(1)).rejects.toBeTruthy()
+		expect(storeMock.offline).toBe(false)
+	})
+
+	it('gives checking for new mail and uploads more time', async () => {
+		axiosMock.post.mockResolvedValueOnce({ data: {} })
+		await syncMailbox(7)
+		expect(axiosMock.post.mock.calls[0][2]).toEqual({ timeout: SYNC_TIME_LIMIT_MS })
+
+		axiosMock.post.mockResolvedValueOnce({ data: { id: 3 } })
+		await uploadAttachment(new Blob(['x']))
+		expect(axiosMock.post.mock.calls[1][2]).toEqual(expect.objectContaining({ timeout: UPLOAD_TIME_LIMIT_MS }))
 	})
 
 	it('flags a sign-in problem in the store', async () => {
@@ -137,8 +185,8 @@ describe('sending', () => {
 			accountId: 1,
 			subject: 'Hello',
 			bodyPlain: 'Hi there',
-		}))
-		expect(axiosMock.post).toHaveBeenNthCalledWith(2, '/index.php/apps/mail/api/outbox/42')
+		}), { timeout: SEND_TIME_LIMIT_MS })
+		expect(axiosMock.post).toHaveBeenNthCalledWith(2, '/index.php/apps/mail/api/outbox/42', undefined, { timeout: SEND_TIME_LIMIT_MS })
 	})
 
 	it('gives the outbox the alias to send from', async () => {
@@ -149,7 +197,7 @@ describe('sending', () => {
 		expect(axiosMock.post).toHaveBeenNthCalledWith(1, '/index.php/apps/mail/api/outbox', expect.objectContaining({
 			accountId: 1,
 			aliasId: 7,
-		}))
+		}), expect.anything())
 	})
 
 	it('sends from the account itself when no alias is given', async () => {

@@ -14,6 +14,7 @@ const storeMock = vi.hoisted(() => ({
 	loadError: false,
 	currentEnvelope: null,
 	authError: null,
+	offline: false,
 	buildVersion: '',
 	version: '',
 }))
@@ -175,5 +176,51 @@ describe('mobile App back arrow', () => {
 		await backButton(wrapper).trigger('click')
 
 		expect(window.location.hash).toBe('#/')
+	})
+})
+
+describe('mobile App with no connection to the server', () => {
+	beforeEach(() => {
+		vi.clearAllMocks()
+		storeMock.accounts = [{ id: 1, emailAddress: 'me@example.com', mailboxes: [] }]
+		storeMock.loadError = false
+		storeMock.offline = true
+	})
+
+	it('says so, and Try again asks Mail again for what is on screen', async () => {
+		const wrapper = mountApp()
+		expect(wrapper.text()).toContain('No connection to the server. Showing what was already loaded.')
+
+		await wrapper.find('.mob__banner .mob__retry').trigger('click')
+
+		expect(wrapper.vm.refreshTick).toBe(1)
+		const { loadAccounts } = await import('../../src/store.js')
+		expect(loadAccounts).not.toHaveBeenCalled()
+	})
+
+	it('loads the accounts again too when they did not all load', async () => {
+		storeMock.accounts = [{ id: 1, emailAddress: 'me@example.com', mailboxes: [], error: true }]
+		const wrapper = mountApp()
+
+		await wrapper.find('.mob__banner .mob__retry').trigger('click')
+
+		const { loadAccounts } = await import('../../src/store.js')
+		expect(loadAccounts).toHaveBeenCalledTimes(1)
+	})
+
+	it('leaves it to the page when the accounts could not be loaded at all', () => {
+		storeMock.accounts = []
+		storeMock.loadError = true
+		const wrapper = mountApp()
+
+		expect(wrapper.text()).not.toContain('No connection to the server')
+		expect(wrapper.text()).toContain('Could not load your mail accounts.')
+	})
+
+	it('shows nothing when the connection works', () => {
+		storeMock.offline = false
+		const wrapper = mountApp()
+
+		expect(wrapper.text()).not.toContain('No connection to the server')
 	})
 })

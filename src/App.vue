@@ -53,6 +53,14 @@
 			</button>
 		</div>
 
+		<!-- Not while the page itself says the accounts could not be loaded -->
+		<div v-if="store.offline && !store.loadError" class="mob__banner" role="status">
+			{{ t('mail_mobile', 'No connection to the server. Showing what was already loaded.') }}
+			<button class="mob__retry" @click="retryConnection">
+				{{ t('mail_mobile', 'Try again') }}
+			</button>
+		</div>
+
 		<div v-if="store.authError" class="mob__banner" role="alert">
 			<template v-if="store.authError === 'RATE_LIMITED'">
 				{{ t('mail_mobile', 'The mail server is temporarily not accepting sign-ins. Retrying automatically…') }}
@@ -121,6 +129,7 @@
 					v-if="route.view === 'message'"
 					:key="route.params[1]"
 					:message-id="Number(route.params[1])"
+					:refresh-tick="refreshTick"
 					@reply="openComposerWith"
 					@forward="openComposerWith"
 					@deleted="onDeleted" />
@@ -149,6 +158,7 @@ import MailboxPicker from './views/MailboxPicker.vue'
 import Reader from './views/Reader.vue'
 import { signInAgain } from './api/mail.js'
 import { AS_TEXT } from './l10nText.js'
+import { forgetMessage } from './memory.js'
 import { defaultMailbox, findMailbox, loadAccounts, store } from './store.js'
 
 export default {
@@ -236,6 +246,15 @@ export default {
 			loadAccounts()
 		},
 
+		// The "No connection" banner's button: everything on screen asks
+		// Mail again; the accounts too, if they did not all load
+		retryConnection() {
+			if (store.accounts.length === 0 || store.accounts.some((account) => account.error)) {
+				loadAccounts()
+			}
+			this.refreshTick++
+		},
+
 		go(hash) {
 			if (window.location.hash === hash) {
 				// No new history entry: nothing to mark
@@ -298,6 +317,9 @@ export default {
 		onDeleted() {
 			// Refresh the list so the deleted/changed message disappears, and
 			// clear the reader (in wide mode) or go back to the list (narrow)
+			if (this.route.view === 'message') {
+				forgetMessage(Number(this.route.params[1]))
+			}
 			this.refreshTick++
 			this.store.currentEnvelope = null
 			if (this.isWide && this.mailbox) {
