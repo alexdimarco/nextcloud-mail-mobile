@@ -617,9 +617,14 @@ export default {
 				this.$emit('sent')
 			} catch (error) {
 				logger.error('could not send message', error)
-				this.notice = store.authError
-					? this.t('mail_mobile', 'Cannot send: the account cannot sign in to the mail server right now.')
-					: this.t('mail_mobile', 'Could not send the message — it may be waiting in the outbox of the full Mail app.')
+				if (store.authError) {
+					this.notice = this.t('mail_mobile', 'Cannot send: the account cannot sign in to the mail server right now.')
+				} else if (store.offline) {
+					// It may have reached Mail before the connection dropped
+					this.notice = this.t('mail_mobile', 'No answer from the server. The message may still go out: look in Sent before sending it again.')
+				} else {
+					this.notice = this.t('mail_mobile', 'Could not send the message — it may be waiting in the outbox of the full Mail app.')
+				}
 			} finally {
 				this.sending = false
 			}

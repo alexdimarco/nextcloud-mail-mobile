@@ -60,11 +60,20 @@
 			{{ notice }}
 		</div>
 
-		<div v-if="loading && envelopes.length === 0" class="list__status">
+		<div v-if="loadFailed && envelopes.length === 0" class="list__status">
+			{{ t('mail_mobile', 'Could not load the messages.') }}
+			<button class="list__retry" @click="refresh">
+				{{ t('mail_mobile', 'Try again') }}
+			</button>
+		</div>
+		<div v-else-if="(loading || syncing) && envelopes.length === 0" class="list__status">
 			{{ t('mail_mobile', 'Loading …') }}
 		</div>
-		<div v-else-if="!loading && envelopes.length === 0" class="list__status">
+		<div v-else-if="envelopes.length === 0" class="list__status">
 			{{ t('mail_mobile', 'No messages') }}
+		</div>
+		<div v-if="syncSlow && envelopes.length > 0" class="list__syncing">
+			{{ t('mail_mobile', 'Checking for new mail …') }}
 		</div>
 
 		<template v-for="row in displayRows">
@@ -173,7 +182,31 @@
 <script>
 import { deleteMessage, fetchEnvelopes, fetchThread, looksLikeConversation, moveMessage, syncMailbox } from '../api/mail.js'
 import logger from '../logger.js'
+import { recallList, rememberList } from '../memory.js'
 import { accountFor, setThreaded, store } from '../store.js'
+
+// Mail sends 25 messages at a time
+const PAGE_SIZE = 25
+// Only when checking for new mail takes longer than this does the list say
+// so; a quick check would just flicker
+const SLOW_SYNC_MS = 1500
+
+/**
+ * The element that scrolls the list: the page area on a phone, the list
+ * column on a wide screen.
+ *
+ * @param {HTMLElement} element the list
+ * @return {HTMLElement|null} the scrolling element, if any
+ */
+function scrollParent(element) {
+	for (let node = element?.parentElement; node; node = node.parentElement) {
+		const overflowY = window.getComputedStyle(node).overflowY
+		if (overflowY === 'auto' || overflowY === 'scroll') {
+			return node
+		}
+	}
+	return null
+}
 
 const LONG_PRESS_MS = 500
 const SWIPE_ACTIVATE_PX = 10
@@ -200,10 +233,20 @@ export default {
 	},
 
 	data() {
+		// The list as last seen during this visit, shown at once
+		const remembered = recallList(this.mailbox.databaseId, store.threaded)
 		return {
-			envelopes: [],
+			envelopes: remembered ? [...remembered.envelopes] : [],
 			loading: false,
-			exhausted: false,
+			// Mail is checking the mail server for new mail, in the background
+			syncing: false,
+			syncSlow: false,
+			// The list could not be loaded and there is none to show
+			loadFailed: false,
+			// Counts refreshes, so an older, slower one never overwrites a newer
+			refreshRun: 0,
+			restoreScrollTop: remembered?.scrollTop ?? 0,
+			exhausted: remembered?.exhausted ?? false,
 			notice: null,
 			// multi-select. selectionMode is independent of selection.length
 			// so "Select" can open an empty selection ready for "Select all",
@@ -307,11 +350,31 @@ export default {
 		refreshTick() {
 			this.refresh()
 		},
+
+		envelopes() {
+			this.keepList()
+		},
+
+		exhausted() {
+			this.keepList()
+		},
 	},
 
 	created() {
 		this.refresh()
 		document.addEventListener('visibilitychange', this.onVisible)
+	},
+
+	mounted() {
+		// Back from a message: the same place in the list
+		if (this.restoreScrollTop > 0) {
+			this.$nextTick(() => {
+				const scroller = scrollParent(this.$el)
+				if (scroller) {
+					scroller.scrollTop = this.restoreScrollTop
+				}
+			})
+		}
 	},
 
 	beforeDestroy() {
@@ -326,35 +389,89 @@ export default {
 			}
 		},
 
+		// Two steps, so a slow connection or mail server never leaves the
+		// list blank: first the list Mail already has, shown at once; then
+		// Mail checks the mail server for new mail, and the list is read
+		// again. Messages already on screen stay there if either fails.
 		async refresh() {
+			const run = ++this.refreshRun
+			const mailboxId = this.mailbox.databaseId
+			let firstReadFailed = false
 			this.loading = true
 			try {
-				// Pull new mail from IMAP first, then read the updated cache.
-				// Best-effort: a sync failure (offline, auth) still falls back
-				// to showing the cached list rather than an empty one; an auth
-				// failure is surfaced via the store by the api layer.
-				try {
-					await syncMailbox(this.mailbox.databaseId)
-				} catch (error) {
-					logger.warn('mailbox sync failed, showing cached messages', error)
-				}
-				this.envelopes = await fetchEnvelopes(this.mailbox.databaseId, undefined, this.threaded) ?? []
-				this.exhausted = this.envelopes.length < 25
-				// A reload is a clean slate for the conversation view; collapse
-				// everything and prune selections that no longer apply
-				this.expandedIds = []
-				this.threadChildren = {}
-				if (this.threaded) {
-					this.selection = []
-					this.selectionMode = false
-				} else {
-					this.selection = this.selection.filter((id) => this.envelopes.some((envelope) => envelope.databaseId === id))
-				}
+				this.showList(await fetchEnvelopes(mailboxId, undefined, this.threaded) ?? [], run)
 			} catch (error) {
 				logger.error('could not load envelopes', error)
+				firstReadFailed = true
+				if (!error?.response) {
+					// No answer at all: checking for new mail would not get one
+					// either. (A folder Mail never read before answers with an
+					// error, and needs that check to fill it.)
+					if (run === this.refreshRun) {
+						this.loadFailed = this.envelopes.length === 0
+					}
+					return
+				}
 			} finally {
-				this.loading = false
+				if (run === this.refreshRun) {
+					this.loading = false
+				}
 			}
+			if (run !== this.refreshRun) {
+				return
+			}
+			this.syncing = true
+			const slow = setTimeout(() => {
+				this.syncSlow = this.syncing && run === this.refreshRun
+			}, SLOW_SYNC_MS)
+			try {
+				await syncMailbox(mailboxId)
+				this.showList(await fetchEnvelopes(mailboxId, undefined, this.threaded) ?? [], run)
+			} catch (error) {
+				logger.warn('could not check for new mail, showing the messages Mail already had', error)
+				if (firstReadFailed && run === this.refreshRun) {
+					this.loadFailed = this.envelopes.length === 0
+				}
+			} finally {
+				clearTimeout(slow)
+				if (run === this.refreshRun) {
+					this.syncing = false
+					this.syncSlow = false
+				}
+			}
+		},
+
+		// Show a freshly read first page without undoing what the person is
+		// doing: older messages loaded with "Load more", open conversations
+		// and selected messages stay, as long as they are still there.
+		showList(page, run) {
+			if (run !== this.refreshRun) {
+				return
+			}
+			const onPage = new Set(page.map((envelope) => envelope.databaseId))
+			const oldest = Math.min(...page.map((envelope) => envelope.dateInt))
+			const older = page.length >= PAGE_SIZE
+				? this.envelopes.filter((envelope) => !onPage.has(envelope.databaseId) && envelope.dateInt < oldest)
+				: []
+			this.envelopes = [...page, ...older]
+			this.exhausted = older.length > 0 ? this.exhausted : page.length < PAGE_SIZE
+			this.loadFailed = false
+			const shown = new Set(this.envelopes.map((envelope) => envelope.databaseId))
+			this.expandedIds = this.expandedIds.filter((id) => shown.has(id))
+			this.threadChildren = Object.fromEntries(Object.entries(this.threadChildren)
+				.filter(([id]) => shown.has(Number(id))))
+			const selectable = new Set(this.selectableIds)
+			this.selection = this.selection.filter((id) => selectable.has(id))
+		},
+
+		keepList() {
+			rememberList(this.mailbox.databaseId, this.threaded, { envelopes: this.envelopes, exhausted: this.exhausted })
+		},
+
+		// Before opening a message: where the list was, for coming back
+		rememberScroll() {
+			const scroller = scrollParent(this.$el)
+			rememberList(this.mailbox.databaseId, this.threaded, { scrollTop: scroller ? scroller.scrollTop : 0 })
 		},
 
 		async loadMore() {
@@ -364,7 +481,7 @@ export default {
 				const page = await fetchEnvelopes(this.mailbox.databaseId, last.dateInt, this.threaded) ?? []
 				const known = new Set(this.envelopes.map((envelope) => envelope.databaseId))
 				this.envelopes = this.envelopes.concat(page.filter((envelope) => !known.has(envelope.databaseId)))
-				this.exhausted = page.length < 25
+				this.exhausted = page.length < PAGE_SIZE
 			} catch (error) {
 				logger.error('could not load more envelopes', error)
 			} finally {
@@ -421,6 +538,9 @@ export default {
 
 		toggleThreaded() {
 			setThreaded(!this.threaded)
+			const remembered = recallList(this.mailbox.databaseId, this.threaded)
+			this.envelopes = remembered ? [...remembered.envelopes] : []
+			this.exhausted = remembered?.exhausted ?? false
 			this.expandedIds = []
 			this.threadChildren = {}
 			this.exitSelection()
@@ -438,6 +558,7 @@ export default {
 				const messages = await fetchThread(id) ?? []
 				if (messages.length <= 1) {
 					// Not actually a conversation — just open the message
+					this.rememberScroll()
 					this.$emit('open', envelope)
 					return
 				}
@@ -602,6 +723,7 @@ export default {
 				this.toggleSelection(row.envelope.databaseId)
 				return
 			}
+			this.rememberScroll()
 			this.$emit('open', row.envelope)
 		},
 
@@ -748,6 +870,22 @@ export default {
 .list__status {
 	padding: 40px 16px;
 	text-align: center;
+	color: var(--mob-text-muted);
+}
+.list__retry {
+	display: block;
+	margin: 16px auto 0;
+	padding: 10px 16px;
+	border: 1px solid var(--mob-accent);
+	border-radius: var(--mob-radius);
+	background: var(--mob-accent-soft);
+	color: var(--mob-accent);
+	font-size: 14px;
+	cursor: pointer;
+}
+.list__syncing {
+	padding: 4px 16px;
+	font-size: 12px;
 	color: var(--mob-text-muted);
 }
 .list__notice {

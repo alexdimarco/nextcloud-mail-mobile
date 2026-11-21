@@ -7,6 +7,9 @@
 	<div class="reader">
 		<div v-if="error" class="reader__status">
 			{{ error }}
+			<button class="reader__retry" @click="retry">
+				{{ t('mail_mobile', 'Try again') }}
+			</button>
 		</div>
 		<div v-else-if="!message" class="reader__status">
 			{{ t('mail_mobile', 'Loading …') }}
@@ -79,6 +82,7 @@
 <script>
 import { deleteMessage, fetchMessage, htmlBodyUrl, setFlags } from '../api/mail.js'
 import logger from '../logger.js'
+import { recallMessage, rememberMessage } from '../memory.js'
 import { accountFor, findMailbox, store } from '../store.js'
 
 // Web addresses and email addresses in plain text. Trailing punctuation
@@ -171,12 +175,19 @@ export default {
 			type: Number,
 			required: true,
 		},
+
+		// Raised by the page's Try again and refresh buttons
+		refreshTick: {
+			type: Number,
+			default: 0,
+		},
 	},
 
 	data() {
 		return {
 			store,
-			message: null,
+			// Opened before during this visit: shown at once, then updated
+			message: recallMessage(this.messageId),
 			error: null,
 			flagged: false,
 		}
@@ -241,6 +252,12 @@ export default {
 		},
 	},
 
+	watch: {
+		refreshTick() {
+			this.retry()
+		},
+	},
+
 	created() {
 		window.addEventListener('resize', this.resizeFrame)
 		this.load()
@@ -252,15 +269,26 @@ export default {
 
 	methods: {
 		async load() {
+			let message
 			try {
-				this.message = await fetchMessage(this.messageId)
+				message = await fetchMessage(this.messageId)
 			} catch (error) {
 				logger.error('could not load message', error)
-				this.error = this.store.authError
-					? this.t('mail_mobile', 'Cannot load the message: the account cannot sign in to the mail server right now.')
-					: this.t('mail_mobile', 'Could not load this message')
+				if (this.message) {
+					// Keep showing the copy loaded earlier in this visit
+					return
+				}
+				if (this.store.authError) {
+					this.error = this.t('mail_mobile', 'Cannot load the message: the account cannot sign in to the mail server right now.')
+				} else if (this.store.offline) {
+					this.error = this.t('mail_mobile', 'No connection to the server, so this message could not be loaded.')
+				} else {
+					this.error = this.t('mail_mobile', 'Could not load this message')
+				}
 				return
 			}
+			this.message = message
+			rememberMessage(this.messageId, message)
 
 			// A failed seen-flag write must not hide the loaded message
 			try {
@@ -273,6 +301,11 @@ export default {
 			} catch (error) {
 				logger.error('could not mark message as seen', error)
 			}
+		},
+
+		retry() {
+			this.error = null
+			this.load()
 		},
 
 		resizeFrame() {
@@ -497,6 +530,17 @@ export default {
 	padding: 40px 16px;
 	text-align: center;
 	color: var(--mob-text-muted);
+}
+.reader__retry {
+	display: block;
+	margin: 16px auto 0;
+	padding: 10px 16px;
+	border: 1px solid var(--mob-accent);
+	border-radius: var(--mob-radius);
+	background: var(--mob-accent-soft);
+	color: var(--mob-accent);
+	font-size: 14px;
+	cursor: pointer;
 }
 .reader__head {
 	padding: 16px;

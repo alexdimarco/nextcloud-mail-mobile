@@ -49,6 +49,9 @@ export const store = Vue.observable({
 	authError: null,
 	// signing in again did not help: show a "Sign in again" button
 	sessionExpired: false,
+	// the last call to Mail got no answer (no connection, or none within
+	// its time limit); the next answer clears it
+	offline: false,
 	// reply details handed from Reader to Composer
 	composerPrefill: null,
 	// message handed from EnvelopeList to Reader
