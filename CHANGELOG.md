@@ -6,6 +6,14 @@
 
 All notable changes to Mail Mobile are listed here.
 
+## 0.2.2 – not released yet
+
+- The From line is always shown when writing a message. With more than
+  one address to send from, it is a box with a down arrow that lists
+  every account's address and all its aliases; with one address, that
+  address is shown as plain text. Before, it was hidden with one address
+  and looked like plain text with several, so it was easy to miss.
+
 ## 0.2.1 – 20 November 2026
 
 Two fixes on the phone page.

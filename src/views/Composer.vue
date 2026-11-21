@@ -5,19 +5,24 @@
 -->
 <template>
 	<form class="composer" @submit.prevent="send">
-		<label v-if="identities.length > 1" class="composer__field">
+		<!-- Always shown, so the sender is never a surprise; a box with an
+			arrow only when there is another address to pick -->
+		<label v-if="identities.length" class="composer__field">
 			<span class="composer__label">{{ t('mail_mobile', 'From') }}</span>
-			<select
-				v-model="identityKey"
-				class="composer__select"
-				@change="onIdentityChange">
-				<option
-					v-for="identity in identities"
-					:key="identity.key"
-					:value="identity.key">
-					{{ identity.name ? identity.name + ' <' + identity.email + '>' : identity.email }}
-				</option>
-			</select>
+			<span v-if="identities.length > 1" class="composer__select-wrap">
+				<select
+					v-model="identityKey"
+					class="composer__select"
+					@change="onIdentityChange">
+					<option
+						v-for="identity in identities"
+						:key="identity.key"
+						:value="identity.key">
+						{{ identityLabel(identity) }}
+					</option>
+				</select>
+			</span>
+			<span v-else class="composer__from">{{ identityLabel(selectedIdentity) }}</span>
 		</label>
 		<label
 			v-for="field in recipientFields"
@@ -363,6 +368,13 @@ export default {
 	},
 
 	methods: {
+		identityLabel(identity) {
+			if (!identity) {
+				return ''
+			}
+			return identity.name ? `${identity.name} <${identity.email}>` : identity.email
+		},
+
 		onEditorInput() {
 			this.editorHtml = this.$refs.editor?.innerHTML ?? ''
 		},
@@ -673,16 +685,54 @@ export default {
 	font-size: 13px;
 	color: var(--mob-text-muted);
 }
-.composer__select {
+/* The sender list looks like something to tap: a box with a down arrow */
+.composer__select-wrap {
+	position: relative;
 	flex: 1;
+	min-width: 0;
+}
+.composer__select-wrap::after {
+	content: '';
+	position: absolute;
+	right: 14px;
+	top: 50%;
+	width: 7px;
+	height: 7px;
+	border-right: 2px solid var(--mob-text-muted);
+	border-bottom: 2px solid var(--mob-text-muted);
+	transform: translateY(-70%) rotate(45deg);
+	pointer-events: none;
+}
+.composer__select {
 	width: 100%;
+	min-height: 40px;
 	margin: 0;
-	border: none;
-	background: transparent;
+	padding: 8px 36px 8px 10px;
+	border: 1px solid var(--mob-border);
+	border-radius: var(--mob-radius);
+	background: var(--mob-bg);
 	color: var(--mob-text);
+	font-family: inherit;
 	font-size: 15px;
+	text-overflow: ellipsis;
+	appearance: none;
+	-webkit-appearance: none;
+	cursor: pointer;
+}
+.composer__select:focus-visible {
+	outline: 2px solid var(--mob-accent);
+	outline-offset: 1px;
+}
+/* Only one address: shown as plain text, nothing to pick */
+.composer__from {
+	flex: 1;
+	min-width: 0;
 	padding: 8px 0;
-	outline: none;
+	font-size: 15px;
+	color: var(--mob-text);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
 }
 .composer__field input {
 	flex: 1;
