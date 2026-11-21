@@ -116,3 +116,64 @@ describe('mobile App with a Mail 6 account whose sign-in expired', () => {
 		expect(wrapper.findAll('.mob__banner')).toHaveLength(0)
 	})
 })
+
+describe('mobile App back arrow', () => {
+	beforeEach(() => {
+		vi.restoreAllMocks()
+		storeMock.accounts = []
+		window.history.replaceState(null, '', '#/')
+	})
+
+	function backButton(wrapper) {
+		return wrapper.find('button[aria-label="Back"]')
+	}
+
+	it('goes to the message\'s folder when a notification opened the message', async () => {
+		// A notification opens a fresh window straight on the message:
+		// there is no earlier page to go back to
+		window.history.replaceState(null, '', '#/msg/5/99')
+		const historyBack = vi.spyOn(window.history, 'back')
+		const length = window.history.length
+		const wrapper = mountApp()
+
+		await backButton(wrapper).trigger('click')
+
+		expect(historyBack).not.toHaveBeenCalled()
+		expect(window.location.hash).toBe('#/box/5')
+		// Replaced, not added: the phone's back gesture does not return
+		// to the message
+		expect(window.history.length).toBe(length)
+	})
+
+	it('goes back normally after opening the message from inside the app', async () => {
+		window.history.replaceState(null, '', '#/box/5')
+		const historyBack = vi.spyOn(window.history, 'back').mockImplementation(() => {})
+		const wrapper = mountApp()
+
+		wrapper.vm.go('#/msg/5/99')
+		wrapper.vm.onHashChange()
+		await wrapper.vm.$nextTick()
+		await backButton(wrapper).trigger('click')
+
+		expect(historyBack).toHaveBeenCalledTimes(1)
+		expect(window.location.hash).toBe('#/msg/5/99')
+	})
+
+	it('does not mark the page as in-app when going to where it already is', () => {
+		window.history.replaceState(null, '', '#/msg/5/99')
+		const wrapper = mountApp()
+
+		wrapper.vm.go('#/msg/5/99')
+
+		expect(window.history.state).toBe(null)
+	})
+
+	it('goes to the main list from any other page with no earlier entry', async () => {
+		window.history.replaceState(null, '', '#/boxes')
+		const wrapper = mountApp()
+
+		await backButton(wrapper).trigger('click')
+
+		expect(window.location.hash).toBe('#/')
+	})
+})
