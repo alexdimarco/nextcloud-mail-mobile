@@ -305,9 +305,37 @@ export default {
 			return source.map((recipient) => ({ label: recipient.label ?? recipient.email, email: recipient.email }))
 		},
 
+		// The alias the mail was sent to, so the answer goes out from the
+		// same address. The first of the account's own addresses found in
+		// To, then Cc, wins. Null for the account's main address, for an
+		// alias of another account, and when no own address is visible
+		// (Bcc, a mailing list).
+		replyAliasId() {
+			const account = (this.store.accounts ?? []).find((candidate) => candidate.id === this.message.accountId)
+			if (!account) {
+				return null
+			}
+			const main = account.emailAddress?.toLowerCase()
+			for (const recipient of [...(this.message.to ?? []), ...(this.message.cc ?? [])]) {
+				const email = recipient.email?.toLowerCase()
+				if (!email) {
+					continue
+				}
+				if (email === main) {
+					return null
+				}
+				const alias = (account.aliases ?? []).find((candidate) => candidate.alias?.toLowerCase() === email)
+				if (alias) {
+					return alias.id
+				}
+			}
+			return null
+		},
+
 		reply() {
 			this.$emit('reply', {
 				accountId: this.message.accountId,
+				aliasId: this.replyAliasId(),
 				to: this.senderRecipients(),
 				subject: this.replySubject(),
 				inReplyToMessageId: this.message.messageId ?? null,
@@ -340,6 +368,7 @@ export default {
 			const recipients = this.replyAllRecipients()
 			this.$emit('reply', {
 				accountId: this.message.accountId,
+				aliasId: this.replyAliasId(),
 				// A mail we sent only to ourselves still needs a recipient
 				to: recipients.to.length ? recipients.to : this.senderRecipients(),
 				cc: recipients.cc,
@@ -362,6 +391,7 @@ export default {
 			})
 			this.$emit('forward', {
 				accountId: message.accountId,
+				aliasId: this.replyAliasId(),
 				to: [],
 				subject: /^fwd?:/i.test(subject) ? subject : `Fwd: ${subject}`,
 				// HTML mail comes sanitized by Mail; its inline images carry
