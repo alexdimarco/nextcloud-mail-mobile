@@ -6,7 +6,20 @@
 
 All notable changes to Mail Mobile are listed here.
 
-## 0.2.0 – not released yet
+## 0.2.1 – 20 November 2026
+
+Two fixes on the phone page.
+
+- Reply, reply all and forward start from the alias the mail was sent to,
+  with that alias's signature, instead of always from the account's main
+  address. The first of the account's own addresses in To, then Cc,
+  decides; when none is visible (Bcc, a mailing list) it stays the main
+  address. The From list can still change it.
+- The back arrow works on a message opened from a notification: it goes
+  to that message's folder. Before, it did nothing, because the page had
+  no earlier page to go back to.
+
+## 0.2.0 – 16 November 2026
 
 Works with Mail 6 as well as Mail 5.13.
 
@@ -43,14 +56,6 @@ Works with Mail 6 as well as Mail 5.13.
   CI runs with install scripts and Composer plugins off.
 - scripts/check-mail-routes.py refuses any server that is not on the same
   machine.
-- Reply, reply all and forward start from the alias the mail was sent to,
-  with that alias's signature, instead of always from the account's main
-  address. The first of the account's own addresses in To, then Cc,
-  decides; when none is visible (Bcc, a mailing list) it stays the main
-  address. The From list can still change it.
-- The back arrow works on a message opened from a notification: it goes
-  to that message's folder. Before, it did nothing, because the page had
-  no earlier page to go back to.
 
 ## 0.1.0 – not released
 
