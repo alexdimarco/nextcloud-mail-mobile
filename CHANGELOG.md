@@ -25,6 +25,18 @@ All notable changes to Mail Mobile are listed here.
   - A message that could not be loaded says why and offers Try again; a
     send with no answer says the message may still go out, so it is not
     sent twice.
+- Add an address to send from without leaving the phone: the From list's
+  last choice, "Add an address …", asks for the address, the name to show
+  with it and, with several accounts, the account it sends through. It is
+  saved in Mail as an alias, as Mail's own account settings do, and is
+  picked at once. An address you already have is picked instead of being
+  added twice. Your mail server must allow the account to send from it.
+  Addresses are added only to your own accounts, never to one someone
+  shared with you.
+- The From line is now always a list, even with one address, because
+  it always offers adding another.
+- The integration test adds an address in Mail 5.13.2 and Mail 6, sends
+  from it, checks it is the sender of the copy in Sent, and removes it.
 
 ## 0.2.2 – 21 November 2026
 
