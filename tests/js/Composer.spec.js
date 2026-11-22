@@ -622,3 +622,182 @@ describe('mobile Composer shows names exactly as they are', () => {
 		expect(composer.find('.composer__notice').text()).toBe('Q&A <draft>.pdf is too large to send by email (limit 25 MB in total)')
 	})
 })
+
+describe('mobile Composer keeps what the person wrote', () => {
+	let store
+	let sendMessage
+	let wrappers
+
+	function mount() {
+		const wrapper = shallowMount(Composer, { mocks: l10nMocks })
+		wrappers.push(wrapper)
+		return wrapper
+	}
+
+	beforeEach(async () => {
+		({ store } = await import('../../src/store.js'))
+		;({ sendMessage } = await import('../../src/api/mail.js'))
+		sendMessage.mockReset()
+		sendMessage.mockResolvedValue(undefined)
+		store.composerPrefill = null
+		window.sessionStorage.clear()
+		wrappers = []
+	})
+
+	afterEach(() => {
+		wrappers.forEach((wrapper) => wrapper.destroy())
+		store.composerPrefill = null
+		delete store.accounts[0].editorMode
+	})
+
+	it('has nothing to lose when just opened, also as a reply', () => {
+		store.composerPrefill = { accountId: 1, to: [{ email: 'alice@example.com' }], subject: 'Re: Numbers', inReplyToMessageId: 5 }
+
+		expect(mount().vm.hasWork).toBe(false)
+		store.composerPrefill = null
+		expect(mount().vm.hasWork).toBe(false)
+	})
+
+	it('counts typed text, a changed recipient or subject, and an attached file', async () => {
+		const typed = mount()
+		await typed.setData({ editorHtml: '<div>Hi Sam</div>' })
+		const addressed = mount()
+		await addressed.setData({ to: 'sam@example.com' })
+		const titled = mount()
+		await titled.setData({ subject: 'Lunch' })
+		const attached = mount()
+		attached.vm.attachments.push({ fileName: 'a.pdf', size: 10, id: 3, uploading: false })
+
+		expect([typed, addressed, titled, attached].map((wrapper) => wrapper.vm.hasWork)).toEqual([true, true, true, true])
+	})
+
+	it('does not count an empty line in the editor', async () => {
+		const wrapper = mount()
+		await wrapper.setData({ editorHtml: '<div><br></div>' })
+
+		expect(wrapper.vm.hasWork).toBe(false)
+	})
+
+	it('has nothing left to lose once sent, or once the person discards it', async () => {
+		const sent = mount()
+		await sent.setData({ to: 'sam@example.com', editorHtml: '<div>Hi</div>' })
+		await sent.vm.send()
+		const discarded = mount()
+		await discarded.setData({ editorHtml: '<div>Hi</div>' })
+		discarded.vm.discard()
+
+		expect(sent.emitted('sent')).toHaveLength(1)
+		expect(sent.vm.hasWork).toBe(false)
+		expect(discarded.vm.hasWork).toBe(false)
+	})
+
+	it('keeps the message as the page goes away, naming a file still uploading', async () => {
+		const { takeDraft } = await import('../../src/draft.js')
+		const wrapper = mount()
+		await wrapper.setData({
+			to: 'sam@example.com',
+			subject: 'Lunch',
+			editorHtml: '<div>Hi Sam</div>',
+			attachments: [
+				{ fileName: 'menu.pdf', size: 10, id: 3, uploading: false },
+				{ fileName: 'photo.jpg', size: 10, id: null, uploading: true },
+			],
+		})
+
+		wrapper.vm.keepForReload()
+
+		expect(takeDraft()).toMatchObject({
+			accountId: 1,
+			identityKey: 'a1',
+			to: 'sam@example.com',
+			subject: 'Lunch',
+			editorHtml: '<div>Hi Sam</div>',
+			attachments: [{ fileName: 'menu.pdf', id: 3 }],
+			uploadingNames: ['photo.jpg'],
+		})
+	})
+
+	it('deletes the kept copy when the page comes back intact, or once sent or discarded', async () => {
+		const wrapper = mount()
+		await wrapper.setData({ to: 'sam@example.com', editorHtml: '<div>Hi</div>' })
+
+		// Left for another page, then back from the browser's cache: the
+		// message is still on screen
+		wrapper.vm.keepForReload()
+		window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true }))
+		expect(window.sessionStorage.length).toBe(0)
+
+		wrapper.vm.keepForReload()
+		await wrapper.vm.send()
+		expect(window.sessionStorage.length).toBe(0)
+
+		const other = mount()
+		await other.setData({ editorHtml: '<div>Hi</div>' })
+		other.vm.keepForReload()
+		other.vm.discard()
+		expect(window.sessionStorage.length).toBe(0)
+	})
+
+	it('keeps nothing when there is nothing to lose', () => {
+		mount().vm.keepForReload()
+
+		expect(window.sessionStorage.length).toBe(0)
+	})
+
+	it('listens for the page going away only while it is open', () => {
+		const add = vi.spyOn(window, 'addEventListener')
+		const remove = vi.spyOn(window, 'removeEventListener')
+		const wrapper = mount()
+		const listener = add.mock.calls.find(([type]) => type === 'pagehide')?.[1]
+
+		wrapper.destroy()
+
+		expect(listener).toBe(wrapper.vm.keepForReload)
+		expect(remove).toHaveBeenCalledWith('pagehide', listener)
+		add.mockRestore()
+		remove.mockRestore()
+	})
+
+	it('opens a kept message again as it was, cleaned, and says so', async () => {
+		store.composerPrefill = {
+			kept: {
+				accountId: 1,
+				identityKey: 'l7',
+				signatureKey: 'none',
+				signatureChosen: true,
+				to: 'sam@example.com',
+				cc: 'kim@example.com',
+				bcc: '',
+				subject: 'Lunch',
+				editorHtml: '<div><b>Hi</b> Sam<img src="https://evil.example/x.png" onerror="steal()"></div>',
+				inReplyToMessageId: 5,
+				attachments: [{ fileName: 'menu.pdf', size: 10, id: 3 }],
+				uploadingNames: ['photo.jpg'],
+			},
+		}
+
+		const wrapper = mount()
+
+		expect(store.composerPrefill).toBe(null)
+		expect(wrapper.vm.identityKey).toBe('l7')
+		expect(wrapper.vm.signatureKey).toBe('none')
+		expect(wrapper.vm.showCcBcc).toBe(true)
+		expect(wrapper.vm.subject).toBe('Lunch')
+		expect(wrapper.vm.inReplyToMessageId).toBe(5)
+		expect(wrapper.find('.composer__body--rich').element.innerHTML).toBe('<div><b>Hi</b> Sam</div>')
+		expect(wrapper.vm.attachments).toEqual([{ fileName: 'menu.pdf', size: 10, id: 3, uploading: false }])
+		expect(wrapper.vm.notice).toBe('Your message was kept while the page reloaded. Attach photo.jpg again: it was still uploading.')
+		// Kept work still counts, so leaving it asks again
+		expect(wrapper.vm.hasWork).toBe(true)
+	})
+
+	it('shows a message kept from the rich editor as text when the account now writes plain text', () => {
+		store.accounts[0].editorMode = 'plaintext'
+		store.composerPrefill = { kept: { accountId: 1, identityKey: 'a1', to: '', subject: '', editorHtml: '<div>Hi Sam</div>' } }
+
+		const wrapper = mount()
+
+		expect(wrapper.vm.body).toBe('Hi Sam')
+		expect(wrapper.vm.notice).toBe('Your message was kept while the page reloaded.')
+	})
+})

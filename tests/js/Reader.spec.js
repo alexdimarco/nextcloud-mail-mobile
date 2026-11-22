@@ -7,7 +7,7 @@
 import { shallowMount } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import Reader from '../../src/views/Reader.vue'
-import { forgetEverything } from '../../src/memory.js'
+import { forgetEverything, recallMessage } from '../../src/memory.js'
 import { l10nMocks } from './l10n.js'
 
 const message = {
@@ -279,5 +279,89 @@ describe('mobile Reader on a slow or dead connection', () => {
 		await reader.setProps({ refreshTick: 1 })
 
 		expect(api.fetchMessage).toHaveBeenCalledTimes(2)
+	})
+})
+
+describe('mobile Reader star', () => {
+	let api
+	let store
+
+	async function open({ flagged = false, listed = null } = {}) {
+		api.fetchMessage.mockResolvedValue({ ...message, flags: { seen: true, flagged } })
+		store.currentEnvelope = listed
+		const wrapper = shallowMount(Reader, { propsData: { messageId: 9 }, mocks: l10nMocks })
+		for (let i = 0; i < 4; i++) {
+			await wrapper.vm.$nextTick()
+		}
+		return wrapper
+	}
+
+	function star(wrapper) {
+		return wrapper.find('.reader__action--star')
+	}
+
+	beforeEach(async () => {
+		forgetEverything()
+		api = await import('../../src/api/mail.js')
+		;({ store } = await import('../../src/store.js'))
+		api.setFlags.mockReset()
+		api.setFlags.mockResolvedValue(undefined)
+	})
+
+	it('shows a starred message as starred, also when opened from a notification', async () => {
+		const wrapper = await open({ flagged: true })
+
+		expect(star(wrapper).text()).toBe('★')
+		expect(star(wrapper).attributes('aria-pressed')).toBe('true')
+		expect(star(wrapper).attributes('aria-label')).toBe('Star')
+		expect(star(wrapper).classes()).toContain('reader__action--starred')
+	})
+
+	it('stars it in Mail, and the list and the copy kept for this visit follow', async () => {
+		const listed = { databaseId: 9, flags: { seen: true, flagged: false } }
+		const wrapper = await open({ listed })
+
+		await star(wrapper).trigger('click')
+		await wrapper.vm.$nextTick()
+
+		expect(api.setFlags).toHaveBeenCalledWith(9, { flagged: true })
+		expect(star(wrapper).text()).toBe('★')
+		expect(listed.flags.flagged).toBe(true)
+		expect(recallMessage(9).flags.flagged).toBe(true)
+	})
+
+	it('never changes the list entry of another message', async () => {
+		const other = { databaseId: 4, flags: { seen: true, flagged: false } }
+		const wrapper = await open({ listed: other })
+
+		await star(wrapper).trigger('click')
+
+		expect(other.flags.flagged).toBe(false)
+	})
+
+	it('puts the star back as it was when Mail does not take it', async () => {
+		const wrapper = await open({ flagged: true })
+		api.setFlags.mockRejectedValueOnce(new Error('Request failed with status 500'))
+
+		await wrapper.vm.toggleFlagged()
+
+		expect(wrapper.vm.flagged).toBe(true)
+		expect(wrapper.vm.flagging).toBe(false)
+	})
+
+	it('ignores a second tap while the first is on its way', async () => {
+		const wrapper = await open()
+		let answer
+		api.setFlags.mockReturnValueOnce(new Promise((resolve) => {
+			answer = resolve
+		}))
+
+		const first = wrapper.vm.toggleFlagged()
+		await wrapper.vm.toggleFlagged()
+		answer()
+		await first
+
+		expect(api.setFlags).toHaveBeenCalledTimes(1)
+		expect(wrapper.vm.flagged).toBe(true)
 	})
 })

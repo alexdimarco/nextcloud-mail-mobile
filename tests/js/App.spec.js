@@ -224,3 +224,150 @@ describe('mobile App with no connection to the server', () => {
 		expect(wrapper.text()).not.toContain('No connection to the server')
 	})
 })
+
+describe('mobile App while a message is being written', () => {
+	// Stands in for the compose screen: something written, or not
+	function composerStub(hasWork) {
+		return {
+			name: 'Composer',
+			data: () => ({ hasWork, discarded: false }),
+			methods: {
+				discard() {
+					this.discarded = true
+					this.hasWork = false
+				},
+			},
+			render: (h) => h('div'),
+		}
+	}
+
+	async function mountComposing(hasWork) {
+		window.matchMedia = window.matchMedia ?? (() => ({ matches: false, addEventListener() {}, removeEventListener() {} }))
+		const wrapper = shallowMount(App, { mocks: l10nMocks, stubs: { Composer: composerStub(hasWork) } })
+		wrapper.vm.go('#/compose')
+		wrapper.vm.onHashChange()
+		await wrapper.vm.$nextTick()
+		return wrapper
+	}
+
+	beforeEach(() => {
+		vi.restoreAllMocks()
+		storeMock.accounts = []
+		storeMock.composerPrefill = null
+		window.sessionStorage.clear()
+		window.history.replaceState(null, '', '#/box/5')
+	})
+
+	it('asks before the back arrow throws it away', async () => {
+		const historyBack = vi.spyOn(window.history, 'back').mockImplementation(() => {})
+		const wrapper = await mountComposing(true)
+
+		await wrapper.find('button[aria-label="Back"]').trigger('click')
+
+		expect(wrapper.find('.mob__confirm').text()).toContain('Discard this message?')
+		expect(historyBack).not.toHaveBeenCalled()
+		expect(wrapper.vm.route.view).toBe('compose')
+	})
+
+	it('"Keep writing" stays on the message', async () => {
+		const historyBack = vi.spyOn(window.history, 'back').mockImplementation(() => {})
+		const wrapper = await mountComposing(true)
+		await wrapper.find('button[aria-label="Back"]').trigger('click')
+
+		await wrapper.findAll('.mob__confirm button').at(0).trigger('click')
+
+		expect(wrapper.find('.mob__confirm').exists()).toBe(false)
+		expect(historyBack).not.toHaveBeenCalled()
+	})
+
+	it('"Discard" throws it away and goes back', async () => {
+		const historyBack = vi.spyOn(window.history, 'back').mockImplementation(() => {})
+		const wrapper = await mountComposing(true)
+		await wrapper.find('button[aria-label="Back"]').trigger('click')
+
+		await wrapper.findAll('.mob__confirm button').at(1).trigger('click')
+
+		expect(wrapper.vm.$refs.composer.discarded).toBe(true)
+		expect(wrapper.find('.mob__confirm').exists()).toBe(false)
+		expect(historyBack).toHaveBeenCalledTimes(1)
+	})
+
+	it('goes back without asking when nothing was written', async () => {
+		const historyBack = vi.spyOn(window.history, 'back').mockImplementation(() => {})
+		const wrapper = await mountComposing(false)
+
+		await wrapper.find('button[aria-label="Back"]').trigger('click')
+
+		expect(wrapper.find('.mob__confirm').exists()).toBe(false)
+		expect(historyBack).toHaveBeenCalledTimes(1)
+	})
+
+	it('the phone\'s back gesture stays on the message and asks; Discard then goes back', async () => {
+		const wrapper = await mountComposing(true)
+		const pushState = vi.spyOn(window.history, 'pushState')
+		const historyBack = vi.spyOn(window.history, 'back').mockImplementation(() => {})
+
+		// The browser already moved back to the list
+		window.history.replaceState(null, '', '#/box/5')
+		wrapper.vm.onHashChange()
+		await wrapper.vm.$nextTick()
+
+		expect(wrapper.vm.route.view).toBe('compose')
+		expect(pushState).toHaveBeenCalledWith({ mailMobile: true }, '', '#/compose')
+		expect(window.location.hash).toBe('#/compose')
+		expect(wrapper.find('.mob__confirm').exists()).toBe(true)
+
+		await wrapper.findAll('.mob__confirm button').at(1).trigger('click')
+		expect(historyBack).toHaveBeenCalledTimes(1)
+
+		// The browser goes back to the list: now it is let through
+		window.history.replaceState(null, '', '#/box/5')
+		wrapper.vm.onHashChange()
+		expect(wrapper.vm.route.view).toBe('list')
+	})
+
+	it('opens a message kept while the page reloaded', async () => {
+		const { keepDraft } = await import('../../src/draft.js')
+		keepDraft({ to: 'sam@example.com', editorHtml: '<div>Hi</div>' })
+
+		const wrapper = mountApp()
+
+		expect(storeMock.composerPrefill.kept).toMatchObject({ to: 'sam@example.com', editorHtml: '<div>Hi</div>' })
+		expect(wrapper.vm.route.view).toBe('compose')
+		expect(window.location.hash).toBe('#/compose')
+		expect(window.sessionStorage.length).toBe(0)
+	})
+
+	it('waits for the accounts before showing the message, so its sender is there', async () => {
+		storeMock.loading = true
+		const wrapper = await mountComposing(true)
+		expect(wrapper.findComponent({ name: 'Composer' }).exists()).toBe(false)
+		expect(wrapper.find('.mob__detail').text()).toContain('Loading your mail')
+
+		storeMock.loading = false
+		await wrapper.vm.$forceUpdate()
+		await wrapper.vm.$nextTick()
+		expect(wrapper.findComponent({ name: 'Composer' }).exists()).toBe(true)
+	})
+
+	it('opens the list as usual when no message was kept', () => {
+		const wrapper = mountApp()
+
+		expect(wrapper.vm.route.view).toBe('list')
+		expect(storeMock.composerPrefill).toBe(null)
+	})
+})
+
+describe('mobile App opening a folder from the list of folders', () => {
+	it('starts it unsearched', async () => {
+		const { recallSearch, rememberSearch } = await import('../../src/memory.js')
+		window.history.replaceState(null, '', '#/boxes')
+		rememberSearch(7, 'invoice')
+		const wrapper = mountApp()
+
+		wrapper.vm.openMailbox({ databaseId: 7 })
+
+		expect(recallSearch(7)).toBe('')
+		expect(window.location.hash).toBe('#/box/7')
+	})
+})

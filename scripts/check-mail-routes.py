@@ -8,9 +8,10 @@ Run by scripts/integration-test.sh once Nextcloud, Mail, Mail Mobile and
 a throwaway mail server are up, and the mail account exists in Mail. It
 signs in like a browser and uses the addresses in src/api/mail.js in the
 order a person would: accounts, folders, the first sync, the message
-list, a message, its HTML, its conversation, flags, address search, an
-attachment upload, sending through the outbox, adding an address to
-send from and sending from it, moving, deleting. Then it
+list, a message, its HTML, its conversation, flags, searching a folder,
+starring, address search, an attachment upload, sending through the
+outbox, adding an address to send from and sending from it, moving,
+deleting. Then it
 turns notifications on and lets one new message arrive, so the caller
 can check that Mail Mobile queued a notification for it.
 
@@ -204,6 +205,24 @@ def envelopes(session, mailbox_id, view='singleton'):
     return listed
 
 
+def search_filter(text):
+    """The search text the phone page sends for words typed in a folder's
+    search box (searchFilter() in src/api/mail.js): the words looked for in
+    the recipients, the sender and the subject, any of them matching; each
+    value encoded as JavaScript's encodeURIComponent() does."""
+    value = urllib.parse.quote(text.strip(), safe="!*'()")
+    return f'to:{value} from:{value} subject:{value} match:anyof'
+
+
+def search(session, mailbox_id, text, view='singleton'):
+    query = urllib.parse.urlencode({'mailboxId': mailbox_id, 'limit': 25, 'view': view,
+                                    'filter': search_filter(text)})
+    _, found = session.json('GET', f'/index.php/apps/mail/api/messages?{query}')
+    if not isinstance(found, list):
+        fail(f'a search did not answer with a list: {found!r}'[:300])
+    return [envelope.get('subject') for envelope in found]
+
+
 def find_subject(session, mailbox_id, subject, tries=10):
     for _ in range(tries):
         for envelope in envelopes(session, mailbox_id):
@@ -304,6 +323,39 @@ def main():
     if not find_subject(session, inbox_id, subject)['flags']['seen']:
         fail('marking the message read did not stick')
     ok(f'body, HTML, conversation ({status}) and the read flag work')
+
+    # Searching a folder, as the phone page's search box does: a subject
+    # with spaces finds only that message, the sender finds both, a word
+    # in neither finds nothing
+    other_subject = f'Something else {run}'
+    append_message(args.imap_port, args.mail_user, args.mail_password, other_subject, html=False)
+    sync(session, inbox_id)
+    find_subject(session, inbox_id, other_subject)
+    found = search(session, inbox_id, subject)
+    if found != [subject]:
+        fail(f'searching for "{subject}" found {found!r}')
+    found = search(session, inbox_id, subject, view='threaded')
+    if subject not in found or other_subject in found:
+        fail(f'searching for "{subject}" with conversations grouped found {found!r}')
+    found = search(session, inbox_id, 'sam@example.com')
+    if sorted(found) != sorted([subject, other_subject]):
+        fail(f'searching for the sender found {found!r}')
+    found = search(session, inbox_id, f'nothing-like-this-{run}')
+    if found != []:
+        fail(f'searching for a word in no message found {found!r}')
+    ok('searching a folder finds by subject and by sender, and nothing for an unknown word')
+
+    # The star: set, then shown in the list and in the message itself
+    session.request('PUT', f'{mail}/api/messages/{message_id}/flags', body={'flags': {'flagged': True}})
+    if find_subject(session, inbox_id, subject)['flags'].get('flagged') is not True:
+        fail('starring the message does not show in the list')
+    _, body = session.json('GET', f'{mail}/api/messages/{message_id}/body')
+    if (body.get('flags') or {}).get('flagged') is not True:
+        fail(f'the message itself does not say it is starred: flags={body.get("flags")!r}')
+    session.request('PUT', f'{mail}/api/messages/{message_id}/flags', body={'flags': {'flagged': False}})
+    if find_subject(session, inbox_id, subject)['flags'].get('flagged') is not False:
+        fail('removing the star does not show in the list')
+    ok('the star is set and removed, and shows in the list and the message')
 
     # Writing: address search, an attachment, sending through the outbox
     _, suggestions = session.json('GET', f'{mail}/api/autoComplete?term=sam')

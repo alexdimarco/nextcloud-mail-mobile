@@ -10,7 +10,7 @@
 				v-if="route.view !== 'list'"
 				class="mob__icon-btn"
 				:aria-label="t('mail_mobile', 'Back')"
-				@click="back">
+				@click="leaveComposer(back)">
 				‹
 			</button>
 			<button
@@ -45,6 +45,17 @@
 			@click="hardReload">
 			{{ t('mail_mobile', 'An updated version is available — tap to reload') }}
 		</button>
+
+		<!-- Asked before a message being written is thrown away -->
+		<div v-if="pendingLeave" class="mob__banner mob__confirm" role="alertdialog">
+			<span class="mob__confirm-text">{{ t('mail_mobile', 'Discard this message?') }}</span>
+			<button class="mob__retry" @click="keepWriting">
+				{{ t('mail_mobile', 'Keep writing') }}
+			</button>
+			<button class="mob__retry mob__retry--danger" @click="discardAndLeave">
+				{{ t('mail_mobile', 'Discard') }}
+			</button>
+		</div>
 
 		<div v-if="store.sessionExpired" class="mob__banner" role="alert">
 			{{ t('mail_mobile', 'Your Nextcloud session has ended, or the server answered with an error page.') }}
@@ -133,7 +144,12 @@
 					@reply="openComposerWith"
 					@forward="openComposerWith"
 					@deleted="onDeleted" />
-				<Composer v-else-if="route.view === 'compose'" @sent="back" />
+				<!-- The sender list needs the accounts: after a reload (with a
+					message kept) the page can open here before they arrive -->
+				<div v-else-if="route.view === 'compose' && store.loading" class="mob__placeholder">
+					{{ t('mail_mobile', 'Loading your mail…') }}
+				</div>
+				<Composer v-else-if="route.view === 'compose'" ref="composer" @sent="back" />
 				<div v-else class="mob__placeholder">
 					{{ t('mail_mobile', 'Select a message to read') }}
 				</div>
@@ -157,8 +173,9 @@ import EnvelopeList from './views/EnvelopeList.vue'
 import MailboxPicker from './views/MailboxPicker.vue'
 import Reader from './views/Reader.vue'
 import { signInAgain } from './api/mail.js'
+import { takeDraft } from './draft.js'
 import { AS_TEXT } from './l10nText.js'
-import { forgetMessage } from './memory.js'
+import { forgetMessage, rememberSearch } from './memory.js'
 import { defaultMailbox, findMailbox, loadAccounts, store } from './store.js'
 
 export default {
@@ -173,6 +190,9 @@ export default {
 			fullAppUrl: generateUrl('/apps/mail/'),
 			wideQuery: window.matchMedia('(min-width: 900px)'),
 			isWide: window.matchMedia('(min-width: 900px)').matches,
+			// What to do once the person agrees to discard the message
+			// being written; null when no question is open
+			pendingLeave: null,
 		}
 	},
 
@@ -213,6 +233,14 @@ export default {
 	created() {
 		window.addEventListener('hashchange', this.onHashChange)
 		this.wideQuery.addEventListener('change', this.onWideChange)
+		// A message was being written when the page reloaded (to sign in
+		// again, or to an updated version): open it again
+		const kept = takeDraft()
+		if (kept) {
+			store.composerPrefill = { kept }
+			this.go('#/compose')
+			this.route = this.parseHash()
+		}
 	},
 
 	beforeDestroy() {
@@ -235,7 +263,39 @@ export default {
 		},
 
 		onHashChange() {
-			this.route = this.parseHash()
+			const next = this.parseHash()
+			if (this.route.view === 'compose' && next.view !== 'compose' && this.$refs.composer?.hasWork) {
+				// The phone's back gesture (or a link) left a message being
+				// written. Stay on it and ask first. The browser is already on
+				// the entry it moved to: put the message back in front of it,
+				// so Discard goes there with one step back.
+				window.history.pushState({ mailMobile: true }, '', '#/compose')
+				this.pendingLeave = () => window.history.back()
+				return
+			}
+			this.pendingLeave = null
+			this.route = next
+		},
+
+		// Leave the message being written only if there is nothing to lose,
+		// or once the person agreed to discard it
+		leaveComposer(proceed) {
+			if (this.route.view === 'compose' && this.$refs.composer?.hasWork) {
+				this.pendingLeave = proceed
+				return
+			}
+			proceed()
+		},
+
+		keepWriting() {
+			this.pendingLeave = null
+		},
+
+		discardAndLeave() {
+			const proceed = this.pendingLeave
+			this.pendingLeave = null
+			this.$refs.composer?.discard()
+			proceed?.()
 		},
 
 		onWideChange(event) {
@@ -294,12 +354,20 @@ export default {
 		},
 
 		openMailbox(mailbox) {
-			this.go(`#/box/${mailbox.databaseId}`)
+			this.leaveComposer(() => {
+				// A folder opened from the list of folders starts unsearched;
+				// back from a message keeps its search
+				rememberSearch(mailbox.databaseId, '')
+				this.go(`#/box/${mailbox.databaseId}`)
+			})
 		},
 
 		openMessage(envelope) {
-			this.store.currentEnvelope = envelope
-			this.go(`#/msg/${envelope.mailboxId}/${envelope.databaseId}`)
+			// On a wide screen the list stays next to a message being written
+			this.leaveComposer(() => {
+				this.store.currentEnvelope = envelope
+				this.go(`#/msg/${envelope.mailboxId}/${envelope.databaseId}`)
+			})
 		},
 
 		openCompose() {
@@ -482,6 +550,26 @@ body#body-public.layout-base #content.app-public {
 	background-color: var(--mob-banner-bg);
 	color: #fff;
 	font-size: 14px;
+}
+/* "Discard this message?": the question, then both answers side by side */
+.mob__confirm {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 8px;
+}
+.mob__confirm-text {
+	flex: 1 1 100%;
+	font-weight: 600;
+}
+.mob__confirm .mob__retry {
+	flex: 1;
+	margin: 0;
+}
+.mob__confirm .mob__retry--danger {
+	border-color: var(--mob-danger);
+	background: var(--mob-danger-soft);
+	color: var(--mob-danger);
 }
 .mob__panes {
 	/* The app owns scrolling: one internal scroller in single-column

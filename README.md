@@ -17,10 +17,12 @@ connected to Nextcloud GmbH; "Nextcloud" is their trademark.
 What you can do on the phone page:
 
 - read your inboxes and folders, with conversations grouped if you like
+- search a folder by sender, recipient or subject
 - swipe a message to archive or delete it, or select many at once
 - reply, reply all, forward, add Cc and Bcc, pick a sender address and a signature
 - add another address to send from, straight from the From list
 - attach files
+- keep what you are writing: Back asks before discarding it, and a reload to sign in again brings it back
 - get a notification on your phone when new mail arrives in an inbox
 
 ## What you need
@@ -203,6 +205,12 @@ again on their phones.
   your password (all devices); when the push service says the address is
   gone; and when your Nextcloud account is deleted. If someone else signs in
   on the same browser, the phone page turns your notifications off there.
+- **On the phone:** mail the page loaded is kept in its memory only while it
+  is open, never saved on the phone. A message you are writing is put in
+  the browser's session storage only while the page reloads (to sign you in
+  again, or for an updated version) and deleted as soon as the page is
+  back; it is never brought back after an hour or for anyone else who
+  signed in on that browser.
 - **What leaves your server:** only the notifications themselves, sent to the
   push service of your phone's browser. Their content is encrypted for your
   phone; the push service cannot read it. It can see that a notification was

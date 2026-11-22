@@ -65,7 +65,14 @@
 				<button class="reader__action" @click="forward">
 					{{ t('mail_mobile', 'Forward') }}
 				</button>
-				<button class="reader__action" @click="toggleFlagged">
+				<button
+					class="reader__action reader__action--star"
+					:class="{ 'reader__action--starred': flagged }"
+					:aria-pressed="flagged ? 'true' : 'false'"
+					:aria-label="t('mail_mobile', 'Star')"
+					:title="flagged ? t('mail_mobile', 'Starred: tap to remove the star') : t('mail_mobile', 'Star this message')"
+					:disabled="flagging"
+					@click="toggleFlagged">
 					{{ flagged ? '★' : '☆' }}
 				</button>
 				<button class="reader__action" @click="markUnread">
@@ -184,12 +191,17 @@ export default {
 	},
 
 	data() {
+		const message = recallMessage(this.messageId)
+		const listed = store.currentEnvelope?.databaseId === this.messageId ? store.currentEnvelope : null
 		return {
 			store,
 			// Opened before during this visit: shown at once, then updated
-			message: recallMessage(this.messageId),
+			message,
 			error: null,
-			flagged: false,
+			// Starred ("flagged" in Mail): from the list, or the copy
+			// remembered, until Mail's answer says
+			flagged: !!(listed?.flags?.flagged ?? message?.flags?.flagged),
+			flagging: false,
 		}
 	},
 
@@ -290,10 +302,13 @@ export default {
 			this.message = message
 			rememberMessage(this.messageId, message)
 
+			// Mail's answer has the message's flags, also when it was opened
+			// from a notification, with no list behind it
+			this.flagged = !!(message.flags?.flagged ?? this.listedEnvelope()?.flags?.flagged)
+
 			// A failed seen-flag write must not hide the loaded message
 			try {
 				const envelope = this.store.currentEnvelope
-				this.flagged = !!envelope?.flags?.flagged
 				if (envelope && !envelope.flags.seen) {
 					await setFlags(this.messageId, { seen: true })
 					envelope.flags.seen = true
@@ -466,16 +481,35 @@ export default {
 					+ '<br>'
 		},
 
+		// The list's entry for this message, if it was opened from the list
+		listedEnvelope() {
+			const envelope = this.store.currentEnvelope
+			return envelope?.databaseId === this.messageId ? envelope : null
+		},
+
+		// Star or unstar: shown at once, undone if Mail does not take it.
+		// The list's ★ and the copy remembered for this visit follow.
 		async toggleFlagged() {
-			this.flagged = !this.flagged
+			if (this.flagging) {
+				return
+			}
+			const value = !this.flagged
+			this.flagged = value
+			this.flagging = true
 			try {
-				await setFlags(this.messageId, { flagged: this.flagged })
-				if (this.store.currentEnvelope) {
-					this.store.currentEnvelope.flags.flagged = this.flagged
+				await setFlags(this.messageId, { flagged: value })
+				const envelope = this.listedEnvelope()
+				if (envelope) {
+					envelope.flags.flagged = value
+				}
+				if (this.message?.flags) {
+					this.message.flags.flagged = value
 				}
 			} catch (error) {
-				this.flagged = !this.flagged
+				this.flagged = !value
 				logger.error('could not flag message', error)
+			} finally {
+				this.flagging = false
 			}
 		},
 
@@ -626,5 +660,16 @@ export default {
 }
 .reader__action--danger {
 	color: var(--mob-danger);
+}
+/* The star: larger than the words beside it, and the list's colour when on */
+.reader__action--star {
+	flex: 0 0 auto;
+	min-width: 44px;
+	font-size: 18px;
+	line-height: 1;
+}
+.reader__action--starred {
+	border-color: var(--mob-star);
+	color: var(--mob-star);
 }
 </style>
