@@ -6,7 +6,7 @@
 
 All notable changes to Mail Mobile are listed here.
 
-## 0.4.0 – not released yet
+## 0.4.0 – 22 November 2026
 
 - A message being written is no longer lost:
   - Back, or the phone's back gesture, asks "Discard this message?" when
