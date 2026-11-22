@@ -7,6 +7,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
 	autocomplete,
 	createAlias,
+	fetchEnvelopes,
 	fetchMailboxes,
 	isMailLoginError,
 	isNoAnswer,
@@ -14,6 +15,7 @@ import {
 	page,
 	REAUTH_ATTEMPT_KEY,
 	reauthenticate,
+	searchFilter,
 	SEND_TIME_LIMIT_MS,
 	sendMessage,
 	SYNC_TIME_LIMIT_MS,
@@ -90,6 +92,29 @@ describe('telling "no answer" from an error answer', () => {
 	})
 })
 
+describe('search text for Mail', () => {
+	it('looks for the words in the sender, the recipients and the subject, as Mail\'s own search box does', () => {
+		expect(searchFilter('invoice')).toBe('to:invoice from:invoice subject:invoice match:anyof')
+	})
+
+	it('keeps spaces, colons and plus signs inside the value', () => {
+		// Mail splits its search text at spaces and each part at its colon,
+		// and reads a plus sign as a space
+		expect(searchFilter('  Re: a+b ')).toBe('to:Re%3A%20a%2Bb from:Re%3A%20a%2Bb subject:Re%3A%20a%2Bb match:anyof')
+	})
+
+	it('also looks in the message text, word by word, when the account says so', () => {
+		expect(searchFilter('lunch friday', { body: true }))
+			.toBe('to:lunch%20friday from:lunch%20friday subject:lunch%20friday body:lunch body:friday match:anyof')
+	})
+
+	it('is empty when there is nothing to look for', () => {
+		expect(searchFilter('')).toBe('')
+		expect(searchFilter('   ')).toBe('')
+		expect(searchFilter(null)).toBe('')
+	})
+})
+
 describe('conversation hint', () => {
 	it('marks a reply as part of a conversation', () => {
 		expect(looksLikeConversation({ messageId: '<b@x>', threadRootId: '<a@x>' })).toBe(true)
@@ -136,6 +161,25 @@ describe('calls to Mail', () => {
 		axiosMock.get.mockResolvedValueOnce({ data: [{ label: 'Sam', email: 'sam@example.com' }] })
 		await autocomplete('sa')
 		expect(axiosMock.get).toHaveBeenCalledWith('/index.php/apps/mail/api/autoComplete', { params: { term: 'sa' }, timeout: 10_000 })
+	})
+
+	it('reads a folder\'s messages, and only the matching ones when searching', async () => {
+		axiosMock.get.mockResolvedValue({ data: [] })
+
+		await fetchEnvelopes(2, undefined, false)
+		await fetchEnvelopes(2, 1700000000, true, 'subject:x match:anyof')
+
+		expect(axiosMock.get.mock.calls[0]).toEqual(['/index.php/apps/mail/api/messages', {
+			params: { mailboxId: 2, limit: 25, view: 'singleton' },
+			timeout: TIME_LIMIT_MS,
+		}])
+		expect(axiosMock.get.mock.calls[1][1].params).toEqual({
+			mailboxId: 2,
+			limit: 25,
+			view: 'threaded',
+			cursor: 1700000000,
+			filter: 'subject:x match:anyof',
+		})
 	})
 
 	it('adds an address to send from to the account, as Mail\'s settings do', async () => {

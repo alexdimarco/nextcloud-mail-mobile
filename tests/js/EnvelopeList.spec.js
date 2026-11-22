@@ -43,6 +43,8 @@ vi.mock('../../src/api/mail.js', () => ({
 	looksLikeConversation: vi.fn((envelope) => !!envelope.threadRootId && envelope.threadRootId !== envelope.messageId),
 	deleteMessage: vi.fn().mockResolvedValue(undefined),
 	moveMessage: vi.fn().mockResolvedValue(undefined),
+	// The real one is tested in mail-api.spec.js
+	searchFilter: vi.fn((text, { body = false } = {}) => (text ? `search:${text}${body ? ':body' : ''}` : '')),
 	syncMailbox: vi.fn().mockResolvedValue(undefined),
 }))
 
@@ -94,7 +96,7 @@ describe('mobile EnvelopeList selection, swipe and move', () => {
 
 		expect(syncMailbox).toHaveBeenCalledWith(INBOX.databaseId)
 		expect(fetchEnvelopes).toHaveBeenCalledTimes(2)
-		expect(fetchEnvelopes).toHaveBeenCalledWith(INBOX.databaseId, undefined, false)
+		expect(fetchEnvelopes).toHaveBeenCalledWith(INBOX.databaseId, undefined, false, '')
 		const [firstRead, secondRead] = fetchEnvelopes.mock.invocationCallOrder
 		const [check] = syncMailbox.mock.invocationCallOrder
 		expect(firstRead).toBeLessThan(check)
@@ -108,7 +110,7 @@ describe('mobile EnvelopeList selection, swipe and move', () => {
 
 		await wrapper.vm.refresh()
 
-		expect(fetchEnvelopes).toHaveBeenCalledWith(INBOX.databaseId, undefined, false)
+		expect(fetchEnvelopes).toHaveBeenCalledWith(INBOX.databaseId, undefined, false, '')
 		expect(wrapper.vm.envelopes.map((item) => item.databaseId)).toEqual([101, 102, 103])
 	})
 
@@ -334,7 +336,7 @@ describe('mobile EnvelopeList threaded (conversation) view', () => {
 
 		await mountThreaded()
 
-		expect(fetchEnvelopes).toHaveBeenCalledWith(INBOX.databaseId, undefined, true)
+		expect(fetchEnvelopes).toHaveBeenCalledWith(INBOX.databaseId, undefined, true, '')
 	})
 
 	it('opens the message directly when a conversation has a single message', async () => {
@@ -628,5 +630,188 @@ describe('mobile EnvelopeList on a slow or dead connection', () => {
 		await Promise.resolve()
 
 		expect(back.scrollTop).toBe(240)
+	})
+})
+
+describe('mobile EnvelopeList search', () => {
+	let api
+
+	function fresh(ids) {
+		return ids.map((id) => envelope(id))
+	}
+
+	async function flush() {
+		for (let i = 0; i < 6; i++) {
+			await Promise.resolve()
+		}
+	}
+
+	async function mount() {
+		const instance = shallowMount(EnvelopeList, {
+			propsData: { mailbox: INBOX },
+			mocks: l10nMocks,
+		})
+		await flush()
+		return instance
+	}
+
+	// What the list asked Mail for, as [cursor, search]
+	function reads() {
+		return api.fetchEnvelopes.mock.calls.map((call) => [call[1], call[3]])
+	}
+
+	beforeEach(async () => {
+		vi.clearAllMocks()
+		forgetEverything()
+		storeMock.threaded = false
+		delete ACCOUNT.searchBody
+		api = await import('../../src/api/mail.js')
+		api.fetchEnvelopes.mockReset()
+		api.syncMailbox.mockReset()
+		api.syncMailbox.mockResolvedValue(undefined)
+		api.fetchEnvelopes.mockResolvedValue(fresh([101, 102, 103]))
+	})
+
+	afterEach(() => {
+		vi.useRealTimers()
+	})
+
+	it('searches once the person stops typing for a moment', async () => {
+		vi.useFakeTimers()
+		const wrapper = await mount()
+		api.fetchEnvelopes.mockClear()
+		api.fetchEnvelopes.mockResolvedValue(fresh([102]))
+
+		await wrapper.find('.search__input').setValue('inv')
+		await wrapper.find('.search__input').setValue('invoice')
+		vi.advanceTimersByTime(499)
+		expect(api.fetchEnvelopes).not.toHaveBeenCalled()
+		vi.advanceTimersByTime(1)
+		await flush()
+
+		// Only the last text; first what Mail has, then after the check
+		expect(reads()).toEqual([[undefined, 'search:invoice'], [undefined, 'search:invoice']])
+		expect(wrapper.vm.envelopes.map((item) => item.databaseId)).toEqual([102])
+	})
+
+	it('searches at once on Enter', async () => {
+		const wrapper = await mount()
+		api.fetchEnvelopes.mockClear()
+
+		await wrapper.find('.search__input').setValue('invoice')
+		await wrapper.find('form.search').trigger('submit')
+		await flush()
+
+		expect(reads()[0]).toEqual([undefined, 'search:invoice'])
+	})
+
+	it('does not search for a single letter', async () => {
+		vi.useFakeTimers()
+		const wrapper = await mount()
+		api.fetchEnvelopes.mockClear()
+
+		await wrapper.find('.search__input').setValue('i')
+		vi.advanceTimersByTime(1000)
+		await wrapper.find('form.search').trigger('submit')
+		await flush()
+
+		expect(api.fetchEnvelopes).not.toHaveBeenCalled()
+	})
+
+	it('also searches the message text when the account says so, as Mail does', async () => {
+		ACCOUNT.searchBody = true
+		const wrapper = await mount()
+		api.fetchEnvelopes.mockClear()
+
+		await wrapper.find('.search__input').setValue('invoice')
+		await wrapper.find('form.search').trigger('submit')
+		await flush()
+
+		expect(reads()[0]).toEqual([undefined, 'search:invoice:body'])
+	})
+
+	it('says when nothing was found', async () => {
+		const wrapper = await mount()
+		api.fetchEnvelopes.mockResolvedValue([])
+
+		await wrapper.find('.search__input').setValue('nothing here')
+		await wrapper.find('form.search').trigger('submit')
+		await flush()
+
+		expect(wrapper.find('.list__status').text()).toBe('Nothing found for "nothing here"')
+	})
+
+	it('clearing the search shows the whole folder again at once', async () => {
+		const wrapper = await mount()
+		api.fetchEnvelopes.mockResolvedValue(fresh([102]))
+		await wrapper.find('.search__input').setValue('invoice')
+		await wrapper.find('form.search').trigger('submit')
+		await flush()
+		api.fetchEnvelopes.mockClear()
+		api.fetchEnvelopes.mockReturnValue(new Promise(() => {}))
+
+		await wrapper.find('.search__clear').trigger('click')
+
+		expect(wrapper.vm.query).toBe('')
+		expect(wrapper.vm.envelopes.map((item) => item.databaseId)).toEqual([101, 102, 103])
+		expect(reads()[0]).toEqual([undefined, ''])
+	})
+
+	it('back from a message returns to the same search and its results', async () => {
+		const first = await mount()
+		api.fetchEnvelopes.mockResolvedValue(fresh([102]))
+		await first.find('.search__input').setValue('invoice')
+		await first.find('form.search').trigger('submit')
+		await flush()
+		first.destroy()
+		api.fetchEnvelopes.mockReturnValue(new Promise(() => {}))
+
+		const again = await mount()
+
+		expect(again.find('.search__input').element.value).toBe('invoice')
+		expect(again.vm.envelopes.map((item) => item.databaseId)).toEqual([102])
+		expect(api.fetchEnvelopes).toHaveBeenLastCalledWith(INBOX.databaseId, undefined, false, 'search:invoice')
+	})
+
+	it('loads more results of the same search', async () => {
+		const wrapper = await mount()
+		api.fetchEnvelopes.mockResolvedValue(Array.from({ length: 25 }, (_, i) => envelope(200 + i, { dateInt: 1700000000 - i })))
+		await wrapper.find('.search__input').setValue('invoice')
+		await wrapper.find('form.search').trigger('submit')
+		await flush()
+		api.fetchEnvelopes.mockClear()
+		api.fetchEnvelopes.mockResolvedValue([envelope(300, { dateInt: 1600000000 })])
+
+		await wrapper.vm.loadMore()
+
+		expect(reads()).toEqual([[1700000000 - 24, 'search:invoice']])
+		expect(wrapper.vm.envelopes).toHaveLength(26)
+	})
+
+	it('drops a page of results that arrives after the search changed', async () => {
+		const wrapper = await mount()
+		let answer
+		api.fetchEnvelopes.mockReturnValueOnce(new Promise((resolve) => {
+			answer = resolve
+		}))
+		const loading = wrapper.vm.loadMore()
+
+		await wrapper.find('.search__input').setValue('invoice')
+		api.fetchEnvelopes.mockResolvedValue(fresh([102]))
+		await wrapper.find('form.search').trigger('submit')
+		await flush()
+		answer([envelope(999, { dateInt: 1 })])
+		await loading
+
+		expect(wrapper.vm.envelopes.map((item) => item.databaseId)).toEqual([102])
+	})
+
+	it('hides the search box while selecting messages', async () => {
+		const wrapper = await mount()
+
+		wrapper.vm.enterSelectionMode()
+		await wrapper.vm.$nextTick()
+
+		expect(wrapper.find('form.search').exists()).toBe(false)
 	})
 })

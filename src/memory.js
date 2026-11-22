@@ -14,6 +14,9 @@ const MAX_MESSAGES = 20
 
 const lists = new Map()
 const messages = new Map()
+// What was searched for in each folder, so back from a message returns
+// to the same search
+const searches = new Map()
 
 /**
  * Keep a value as the most recent, dropping the oldest beyond the limit.
@@ -34,10 +37,11 @@ function keep(map, key, value, max) {
 /**
  * @param {number} mailboxId the folder
  * @param {boolean} threaded whether the list groups conversations
+ * @param {string} search what was searched for; '' for the whole folder
  * @return {string} the key for that folder's list in that view
  */
-function listKey(mailboxId, threaded) {
-	return `${mailboxId}:${threaded ? 'conversations' : 'messages'}`
+function listKey(mailboxId, threaded, search = '') {
+	return `${mailboxId}:${threaded ? 'conversations' : 'messages'}:${search}`
 }
 
 /**
@@ -47,19 +51,41 @@ function listKey(mailboxId, threaded) {
  * @param {number} mailboxId the folder
  * @param {boolean} threaded whether the list groups conversations
  * @param {object} fields any of envelopes, exhausted, scrollTop
+ * @param {string} search what was searched for; '' for the whole folder
  */
-export function rememberList(mailboxId, threaded, fields) {
-	const key = listKey(mailboxId, threaded)
+export function rememberList(mailboxId, threaded, fields, search = '') {
+	const key = listKey(mailboxId, threaded, search)
 	keep(lists, key, { envelopes: [], exhausted: false, scrollTop: 0, ...lists.get(key), ...fields }, MAX_LISTS)
 }
 
 /**
  * @param {number} mailboxId the folder
  * @param {boolean} threaded whether the list groups conversations
+ * @param {string} search what was searched for; '' for the whole folder
  * @return {object|null} { envelopes, exhausted, scrollTop }, or null
  */
-export function recallList(mailboxId, threaded) {
-	return lists.get(listKey(mailboxId, threaded)) ?? null
+export function recallList(mailboxId, threaded, search = '') {
+	return lists.get(listKey(mailboxId, threaded, search)) ?? null
+}
+
+/**
+ * @param {number} mailboxId the folder
+ * @param {string} search what is searched for now; '' for none
+ */
+export function rememberSearch(mailboxId, search) {
+	if (search) {
+		keep(searches, Number(mailboxId), search, MAX_LISTS)
+	} else {
+		searches.delete(Number(mailboxId))
+	}
+}
+
+/**
+ * @param {number} mailboxId the folder
+ * @return {string} what was last searched for there; '' for none
+ */
+export function recallSearch(mailboxId) {
+	return searches.get(Number(mailboxId)) ?? ''
 }
 
 /**
@@ -98,4 +124,5 @@ export function forgetMessage(id) {
 export function forgetEverything() {
 	lists.clear()
 	messages.clear()
+	searches.clear()
 }

@@ -5,6 +5,30 @@
 -->
 <template>
 	<div class="list">
+		<!-- Searches as you type, after a short pause; Enter searches at once -->
+		<form
+			v-if="!selectionMode"
+			class="search"
+			role="search"
+			@submit.prevent="applySearch">
+			<input
+				v-model="query"
+				class="search__input"
+				type="search"
+				enterkeyhint="search"
+				autocapitalize="off"
+				autocomplete="off"
+				:placeholder="t('mail_mobile', 'Search this folder')"
+				:aria-label="t('mail_mobile', 'Search this folder')">
+			<button
+				v-if="query"
+				type="button"
+				class="search__clear"
+				:aria-label="t('mail_mobile', 'Clear search')"
+				@click="clearSearch">
+				✕
+			</button>
+		</form>
 		<div v-if="!selectionMode && envelopes.length > 0" class="listbar">
 			<button
 				class="listbar__toggle"
@@ -70,7 +94,9 @@
 			{{ t('mail_mobile', 'Loading …') }}
 		</div>
 		<div v-else-if="envelopes.length === 0" class="list__status">
-			{{ t('mail_mobile', 'No messages') }}
+			{{ searchText
+				? t('mail_mobile', 'Nothing found for "{text}"', { text: searchText }, AS_TEXT)
+				: t('mail_mobile', 'No messages') }}
 		</div>
 		<div v-if="syncSlow && envelopes.length > 0" class="list__syncing">
 			{{ t('mail_mobile', 'Checking for new mail …') }}
@@ -180,9 +206,10 @@
 </template>
 
 <script>
-import { deleteMessage, fetchEnvelopes, fetchThread, looksLikeConversation, moveMessage, syncMailbox } from '../api/mail.js'
+import { deleteMessage, fetchEnvelopes, fetchThread, looksLikeConversation, moveMessage, searchFilter, syncMailbox } from '../api/mail.js'
+import { AS_TEXT } from '../l10nText.js'
 import logger from '../logger.js'
-import { recallList, rememberList } from '../memory.js'
+import { recallList, recallSearch, rememberList, rememberSearch } from '../memory.js'
 import { accountFor, setThreaded, store } from '../store.js'
 
 // Mail sends 25 messages at a time
@@ -190,6 +217,10 @@ const PAGE_SIZE = 25
 // Only when checking for new mail takes longer than this does the list say
 // so; a quick check would just flicker
 const SLOW_SYNC_MS = 1500
+// Typing searches once the person pauses this long
+const SEARCH_PAUSE_MS = 500
+// Mail's own search box looks for at least 2 letters
+const SEARCH_MIN_LENGTH = 2
 
 /**
  * The element that scrolls the list: the page area on a phone, the list
@@ -233,9 +264,16 @@ export default {
 	},
 
 	data() {
-		// The list as last seen during this visit, shown at once
-		const remembered = recallList(this.mailbox.databaseId, store.threaded)
+		// The list as last seen during this visit, shown at once, with the
+		// search it showed (back from a message returns to the same search)
+		const searchText = recallSearch(this.mailbox.databaseId)
+		const remembered = recallList(this.mailbox.databaseId, store.threaded, searchText)
 		return {
+			AS_TEXT,
+			// What is in the search box, and what the list shows results for
+			query: searchText,
+			searchText,
+			searchTimer: null,
 			envelopes: remembered ? [...remembered.envelopes] : [],
 			loading: false,
 			// Mail is checking the mail server for new mail, in the background
@@ -321,6 +359,13 @@ export default {
 			return accountFor(this.mailbox)
 		},
 
+		// The search as Mail takes it; '' when not searching. Like Mail's
+		// own search, the message text is searched only when the account's
+		// "search in message body" setting is on.
+		filter() {
+			return searchFilter(this.searchText, { body: !!this.account?.searchBody })
+		},
+
 		// Deleting requires a trash folder to move into — same gate the
 		// reader uses, and what the server enforces
 		canDelete() {
@@ -358,6 +403,14 @@ export default {
 		exhausted() {
 			this.keepList()
 		},
+
+		query(text) {
+			clearTimeout(this.searchTimer)
+			const length = text.trim().length
+			if (length === 0 || length >= SEARCH_MIN_LENGTH) {
+				this.searchTimer = setTimeout(this.applySearch, SEARCH_PAUSE_MS)
+			}
+		},
 	},
 
 	created() {
@@ -380,6 +433,7 @@ export default {
 	beforeDestroy() {
 		document.removeEventListener('visibilitychange', this.onVisible)
 		clearTimeout(this.longPressTimer)
+		clearTimeout(this.searchTimer)
 	},
 
 	methods: {
@@ -396,10 +450,11 @@ export default {
 		async refresh() {
 			const run = ++this.refreshRun
 			const mailboxId = this.mailbox.databaseId
+			const filter = this.filter
 			let firstReadFailed = false
 			this.loading = true
 			try {
-				this.showList(await fetchEnvelopes(mailboxId, undefined, this.threaded) ?? [], run)
+				this.showList(await fetchEnvelopes(mailboxId, undefined, this.threaded, filter) ?? [], run)
 			} catch (error) {
 				logger.error('could not load envelopes', error)
 				firstReadFailed = true
@@ -426,7 +481,7 @@ export default {
 			}, SLOW_SYNC_MS)
 			try {
 				await syncMailbox(mailboxId)
-				this.showList(await fetchEnvelopes(mailboxId, undefined, this.threaded) ?? [], run)
+				this.showList(await fetchEnvelopes(mailboxId, undefined, this.threaded, filter) ?? [], run)
 			} catch (error) {
 				logger.warn('could not check for new mail, showing the messages Mail already had', error)
 				if (firstReadFailed && run === this.refreshRun) {
@@ -465,20 +520,51 @@ export default {
 		},
 
 		keepList() {
-			rememberList(this.mailbox.databaseId, this.threaded, { envelopes: this.envelopes, exhausted: this.exhausted })
+			rememberList(this.mailbox.databaseId, this.threaded, { envelopes: this.envelopes, exhausted: this.exhausted }, this.searchText)
 		},
 
 		// Before opening a message: where the list was, for coming back
 		rememberScroll() {
 			const scroller = scrollParent(this.$el)
-			rememberList(this.mailbox.databaseId, this.threaded, { scrollTop: scroller ? scroller.scrollTop : 0 })
+			rememberList(this.mailbox.databaseId, this.threaded, { scrollTop: scroller ? scroller.scrollTop : 0 }, this.searchText)
+		},
+
+		// Show results for what is in the search box (or the whole folder
+		// when it is empty): the results remembered from earlier in this
+		// visit at once, then the newest from Mail
+		applySearch() {
+			clearTimeout(this.searchTimer)
+			const text = this.query.trim()
+			if (text === this.searchText || (text.length > 0 && text.length < SEARCH_MIN_LENGTH)) {
+				return
+			}
+			this.searchText = text
+			rememberSearch(this.mailbox.databaseId, text)
+			const remembered = recallList(this.mailbox.databaseId, this.threaded, text)
+			this.envelopes = remembered ? [...remembered.envelopes] : []
+			this.exhausted = remembered?.exhausted ?? false
+			this.expandedIds = []
+			this.threadChildren = {}
+			this.loadFailed = false
+			this.refresh()
+		},
+
+		clearSearch() {
+			this.query = ''
+			this.applySearch()
 		},
 
 		async loadMore() {
+			// A page for another search or view than the one now shown is dropped
+			const search = this.searchText
+			const threaded = this.threaded
 			this.loading = true
 			try {
 				const last = this.envelopes[this.envelopes.length - 1]
-				const page = await fetchEnvelopes(this.mailbox.databaseId, last.dateInt, this.threaded) ?? []
+				const page = await fetchEnvelopes(this.mailbox.databaseId, last.dateInt, threaded, this.filter) ?? []
+				if (search !== this.searchText || threaded !== this.threaded) {
+					return
+				}
 				const known = new Set(this.envelopes.map((envelope) => envelope.databaseId))
 				this.envelopes = this.envelopes.concat(page.filter((envelope) => !known.has(envelope.databaseId)))
 				this.exhausted = page.length < PAGE_SIZE
@@ -538,7 +624,7 @@ export default {
 
 		toggleThreaded() {
 			setThreaded(!this.threaded)
-			const remembered = recallList(this.mailbox.databaseId, this.threaded)
+			const remembered = recallList(this.mailbox.databaseId, this.threaded, this.searchText)
 			this.envelopes = remembered ? [...remembered.envelopes] : []
 			this.exhausted = remembered?.exhausted ?? false
 			this.expandedIds = []
@@ -903,6 +989,48 @@ export default {
 	border-radius: var(--mob-radius);
 	background: transparent;
 	color: var(--mob-text);
+	cursor: pointer;
+}
+/* Scrolls away with the list; the bar below it stays at the top */
+.search {
+	position: relative;
+	display: flex;
+	align-items: center;
+	margin: 8px 12px 2px;
+}
+.search__input {
+	flex: 1;
+	min-width: 0;
+	box-sizing: border-box;
+	height: 40px;
+	padding-block: 0;
+	padding-inline: 12px 40px;
+	border: 1px solid var(--mob-border);
+	border-radius: 999px;
+	background-color: var(--mob-hover);
+	color: var(--mob-text);
+	/* 16px or more: phones do not zoom the page in on it */
+	font-size: 16px;
+}
+.search__input:focus-visible {
+	outline: 2px solid var(--mob-accent);
+	outline-offset: 1px;
+}
+/* The ✕ below clears it; not the browser's own as well */
+.search__input::-webkit-search-cancel-button {
+	-webkit-appearance: none;
+	appearance: none;
+}
+.search__clear {
+	position: absolute;
+	inset-inline-end: 4px;
+	width: 36px;
+	height: 36px;
+	border: none;
+	border-radius: 50%;
+	background: transparent;
+	color: var(--mob-text-muted);
+	font-size: 15px;
 	cursor: pointer;
 }
 .listbar {

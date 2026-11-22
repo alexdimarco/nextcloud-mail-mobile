@@ -6,6 +6,32 @@
 
 All notable changes to Mail Mobile are listed here.
 
+## 0.4.0 – not released yet
+
+- A message being written is no longer lost:
+  - Back, or the phone's back gesture, asks "Discard this message?" when
+    something was typed, a recipient or the subject changed, or a file
+    was attached. Keep writing stays; Discard leaves. With nothing
+    written, Back leaves at once, as before.
+  - When the page reloads while a message is being written (to sign in
+    again when the Nextcloud session ran out, or for an updated version),
+    the message opens again afterwards, with its sender, recipients and
+    files already uploaded. A file still uploading is named, to attach
+    again. It is held in the browser's session storage only during the
+    reload, deleted as soon as it is back, and never brought back after
+    an hour or for someone else who signed in on the phone.
+- Search a folder: a search box at the top of the list looks for the
+  words in the sender, the recipients and the subject, as Mail's own
+  search box does, and in the message text too when the account's
+  "search in message body" setting is on. It searches once typing
+  pauses, or at once on Enter; ✕ shows the whole folder again. Back from
+  a message returns to the same search; a folder opened from the list of
+  folders starts unsearched.
+- The star on a message shows whether it is starred also when the
+  message was opened from a notification, is coloured when on, and has a
+  name screen readers say ("Star", pressed or not). Two quick taps no
+  longer send two changes.
+
 ## 0.3.0 – 21 November 2026
 
 - On a slow or dead connection the page no longer waits for good:

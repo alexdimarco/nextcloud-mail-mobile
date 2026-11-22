@@ -280,7 +280,45 @@ export async function syncMailbox(mailboxId) {
 	}
 }
 
-export async function fetchEnvelopes(mailboxId, cursor, threaded = false) {
+/**
+ * Mail's search text for words typed in a folder's search box, built the
+ * way Mail's own search box builds it: the words are looked for in the
+ * sender, the recipients and the subject, and also in the message text
+ * when the account's "search in message body" setting is on; a message
+ * matching any of them is found. Mail ignores plain words: each must be
+ * given as "field:value", encoded so a space or colon stays in the value.
+ *
+ * @param {string} text what the person typed
+ * @param {object} options options
+ * @param {boolean} options.body whether to look in the message text too
+ * @return {string} the search text for Mail, or '' for no search
+ */
+export function searchFilter(text, { body = false } = {}) {
+	const query = String(text ?? '').trim()
+	if (query === '') {
+		return ''
+	}
+	const value = encodeURIComponent(query)
+	const tokens = [`to:${value}`, `from:${value}`, `subject:${value}`]
+	if (body) {
+		for (const word of query.split(/\s+/)) {
+			tokens.push(`body:${encodeURIComponent(word)}`)
+		}
+	}
+	tokens.push('match:anyof')
+	return tokens.join(' ')
+}
+
+/**
+ * One page of a folder's messages, newest first.
+ *
+ * @param {number} mailboxId the folder
+ * @param {number|undefined} cursor the date of the last message already shown, for the next page
+ * @param {boolean} threaded whether to group conversations
+ * @param {string} filter a search, from searchFilter(); '' for all messages
+ * @return {Promise<Array>} the messages
+ */
+export async function fetchEnvelopes(mailboxId, cursor, threaded = false, filter = '') {
 	const params = {
 		mailboxId,
 		limit: 25,
@@ -288,6 +326,9 @@ export async function fetchEnvelopes(mailboxId, cursor, threaded = false) {
 	}
 	if (cursor) {
 		params.cursor = cursor
+	}
+	if (filter) {
+		params.filter = filter
 	}
 	try {
 		const resp = await http.get(generateUrl('/apps/mail/api/messages'), { params })

@@ -268,6 +268,7 @@
 
 <script>
 import { autocomplete, createAlias, sendMessage, uploadAttachment } from '../api/mail.js'
+import { cleanEditorHtml, forgetDraft, keepDraft } from '../draft.js'
 import { AS_TEXT } from '../l10nText.js'
 import logger from '../logger.js'
 import { store } from '../store.js'
@@ -334,35 +335,52 @@ export default {
 	name: 'Composer',
 	data() {
 		const prefill = store.composerPrefill ?? {}
-		const accountId = prefill.accountId ?? store.accounts[0]?.id
+		// A message kept while the page reloaded (see draft.js)
+		const kept = prefill.kept ?? null
+		const source = kept ?? prefill
+		const accountId = source.accountId ?? store.accounts[0]?.id
 		const identities = buildIdentities(store.accounts)
 		// A reply or forward starts from the alias the mail was sent to;
 		// anything else, or an alias since removed, from the account itself
-		const initial = identities.find((identity) => identity.accountId === accountId && identity.aliasId === (prefill.aliasId ?? null))
+		const initial = (kept && identities.find((identity) => identity.key === kept.identityKey))
+			?? identities.find((identity) => identity.accountId === accountId && identity.aliasId === (prefill.aliasId ?? null))
 			?? identities.find((identity) => identity.accountId === accountId && identity.aliasId === null)
 			?? identities[0]
+		const addresses = (recipients) => (recipients ?? []).map((recipient) => recipient.email).join(', ')
+		const to = kept ? String(kept.to ?? '') : addresses(prefill.to)
+		const cc = kept ? String(kept.cc ?? '') : addresses(prefill.cc)
+		const bcc = kept ? String(kept.bcc ?? '') : addresses(prefill.bcc)
+		const subject = String(source.subject ?? '')
+		// Forwarded attachments are references the server resolves; local
+		// uploads are added with an id by onFiles()
+		const attachments = (source.attachments ?? []).map((attachment) => ({ ...attachment, uploading: false }))
 		return {
 			accountId,
 			identityKey: initial?.key ?? null,
-			signatureKey: initial?.signature ? initial.key : 'none',
-			signatureChosen: false,
-			to: (prefill.to ?? []).map((recipient) => recipient.email).join(', '),
-			cc: (prefill.cc ?? []).map((recipient) => recipient.email).join(', '),
-			bcc: (prefill.bcc ?? []).map((recipient) => recipient.email).join(', '),
-			showCcBcc: (prefill.cc ?? []).length > 0 || (prefill.bcc ?? []).length > 0,
-			subject: prefill.subject ?? '',
-			inReplyToMessageId: prefill.inReplyToMessageId ?? null,
-			forwardedHtml: prefill.forwardedHtml ?? null,
-			forwardedFrom: prefill.forwardedFrom ?? '',
+			signatureKey: kept?.signatureKey ?? (initial?.signature ? initial.key : 'none'),
+			signatureChosen: kept?.signatureChosen ?? false,
+			to,
+			cc,
+			bcc,
+			showCcBcc: cc !== '' || bcc !== '',
+			subject,
+			inReplyToMessageId: source.inReplyToMessageId ?? null,
+			forwardedHtml: source.forwardedHtml ?? null,
+			forwardedFrom: source.forwardedFrom ?? '',
 			// Images embedded in the forwarded body: not shown as chips, they
 			// are part of the quoted message and travel with it
-			forwardedInline: prefill.inlineAttachments ?? [],
-			body: '',
-			editorHtml: '',
+			forwardedInline: (kept ? kept.forwardedInline : prefill.inlineAttachments) ?? [],
+			body: kept ? String(kept.body ?? '') : '',
+			editorHtml: kept ? cleanEditorHtml(kept.editorHtml) : '',
 			emojis: ['🙂', '😂', '😢', '😭', '🤷', '👍', '❤️', '🎉'],
-			// Forwarded attachments are references the server resolves; local
-			// uploads are added with an id by onFiles()
-			attachments: (prefill.attachments ?? []).map((attachment) => ({ ...attachment, uploading: false })),
+			attachments,
+			// How the message was when opened: leaving it unchanged loses
+			// nothing, so it needs no question. A kept message always counts.
+			restored: kept !== null,
+			opened: JSON.stringify([to, cc, bcc, subject, attachments.length]),
+			// Sent, or the person chose to discard it: nothing left to keep
+			sent: false,
+			discarded: false,
 			sending: false,
 			// The sender has an S/MIME certificate and the person agreed to
 			// send this message unsigned anyway
@@ -463,9 +481,92 @@ export default {
 		totalBytes() {
 			return this.attachments.reduce((sum, attachment) => sum + (attachment.size ?? 0), 0)
 		},
+
+		// Whether leaving now would lose something the person did: text
+		// typed, a recipient or the subject changed, a file attached or
+		// removed. The page asks before throwing that away.
+		hasWork() {
+			if (this.sent || this.discarded) {
+				return false
+			}
+			if (this.restored) {
+				return true
+			}
+			const typed = (this.body + signatureToText(this.editorHtml)).trim()
+			return typed !== ''
+				|| JSON.stringify([this.to, this.cc, this.bcc, this.subject, this.attachments.length]) !== this.opened
+		},
+	},
+
+	created() {
+		const kept = store.composerPrefill?.kept
+		if (!kept) {
+			return
+		}
+		store.composerPrefill = null
+		const waiting = kept.uploadingNames ?? []
+		this.notice = waiting.length > 0
+			? this.t('mail_mobile', 'Your message was kept while the page reloaded. Attach {files} again: it was still uploading.', { files: waiting.join(', ') }, AS_TEXT)
+			: this.t('mail_mobile', 'Your message was kept while the page reloaded.')
+	},
+
+	mounted() {
+		window.addEventListener('pagehide', this.keepForReload)
+		// Back from the back-forward cache with the message still on
+		// screen: the copy kept as the page went away is not needed
+		window.addEventListener('pageshow', forgetDraft)
+		if (this.editorHtml && this.$refs.editor) {
+			// Cleaned in data(): plain formatting only
+			this.$refs.editor.innerHTML = this.editorHtml
+		} else if (this.editorHtml && !this.body) {
+			// Kept from the rich editor, and the account now writes plain text
+			this.body = signatureToText(this.editorHtml)
+		}
+	},
+
+	beforeDestroy() {
+		window.removeEventListener('pagehide', this.keepForReload)
+		window.removeEventListener('pageshow', forgetDraft)
+		clearTimeout(this.suggestTimer)
+		clearTimeout(this.hideTimer)
 	},
 
 	methods: {
+		// The page is going away (reloading to sign in again, or to an
+		// updated version): keep the message so it comes back afterwards
+		keepForReload() {
+			if (!this.hasWork) {
+				return
+			}
+			keepDraft({
+				accountId: this.accountId,
+				identityKey: this.identityKey,
+				signatureKey: this.signatureKey,
+				signatureChosen: this.signatureChosen,
+				to: this.to,
+				cc: this.cc,
+				bcc: this.bcc,
+				subject: this.subject,
+				body: this.body,
+				editorHtml: this.editorHtml,
+				inReplyToMessageId: this.inReplyToMessageId,
+				forwardedHtml: this.forwardedHtml,
+				forwardedFrom: this.forwardedFrom,
+				forwardedInline: this.forwardedInline,
+				// Files already uploaded to Mail keep their place; one still
+				// uploading is named, to attach again
+				attachments: this.attachments
+					.filter((attachment) => !attachment.uploading && attachment.id !== null && attachment.id !== undefined),
+				uploadingNames: this.attachments.filter((attachment) => attachment.uploading).map((attachment) => attachment.fileName),
+			})
+		},
+
+		// The person chose to throw the message away
+		discard() {
+			this.discarded = true
+			forgetDraft()
+		},
+
 		identityLabel(identity) {
 			if (!identity) {
 				return ''
@@ -773,6 +874,8 @@ export default {
 					],
 				})
 				store.composerPrefill = null
+				this.sent = true
+				forgetDraft()
 				this.$emit('sent')
 			} catch (error) {
 				logger.error('could not send message', error)
