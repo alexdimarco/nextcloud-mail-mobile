@@ -19,6 +19,8 @@ What you can do on the phone page:
 - read your inboxes and folders, with conversations grouped if you like
 - search a folder by sender, recipient or subject
 - swipe a message to archive or delete it, or select many at once
+- move junk to the junk folder, and back to the inbox when it was not junk
+- pin a message to the top of its folder (it carries a "Pinned" tag, which the full Mail app shows too)
 - reply, reply all, forward, add Cc and Bcc, pick a sender address and a signature
 - add another address to send from, straight from the From list
 - attach files
@@ -256,8 +258,8 @@ the built app, and checks the page, the manifest, the service worker, the
 push key, the allowlist and sign-out. Then
 [`scripts/check-mail-routes.py`](scripts/check-mail-routes.py) uses every
 Mail address the phone page calls with a real mail account (folders, first
-sync, list, reading, flags, address search, attachments, sending, moving,
-deleting), new inbox mail must queue a notification job, and with Mail
+sync, list, reading, flags, searching, starring, pinning, junk, address
+search, attachments, sending, moving, deleting), new inbox mail must queue a notification job, and with Mail
 turned off the page must show the "needs Mail" message.
 
 GitHub runs all of this on every push to `main` and on every pull request

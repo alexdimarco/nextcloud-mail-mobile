@@ -55,6 +55,9 @@
 			<!-- Plain-text mail: shown as text, never as HTML; links are found here -->
 			<PlainText v-else class="reader__plain" :parts="plainParts" />
 
+			<p v-if="notice" class="reader__notice" role="alert">
+				{{ notice }}
+			</p>
 			<div class="reader__actions">
 				<button class="reader__action reader__action--primary" @click="reply">
 					{{ t('mail_mobile', 'Reply') }}
@@ -75,8 +78,26 @@
 					@click="toggleFlagged">
 					{{ flagged ? '★' : '☆' }}
 				</button>
+				<!-- Pinned messages stay at the top of their folder's list -->
+				<button
+					class="reader__action reader__action--icon"
+					:class="{ 'reader__action--pinned': pinned }"
+					:aria-pressed="pinned ? 'true' : 'false'"
+					:aria-label="t('mail_mobile', 'Pin')"
+					:title="pinned ? t('mail_mobile', 'Pinned to the top of the folder: tap to unpin') : t('mail_mobile', 'Pin to the top of the folder')"
+					:disabled="pinning"
+					@click="togglePinned">
+					<span class="reader__pin" aria-hidden="true">📌</span>
+				</button>
 				<button class="reader__action" @click="markUnread">
 					{{ t('mail_mobile', 'Unread') }}
+				</button>
+				<button
+					v-if="canJunk"
+					class="reader__action"
+					:disabled="movingJunk"
+					@click="toggleJunk">
+					{{ inJunk ? t('mail_mobile', 'Not junk') : t('mail_mobile', 'Junk') }}
 				</button>
 				<button v-if="canDelete" class="reader__action reader__action--danger" @click="remove">
 					{{ t('mail_mobile', 'Delete') }}
@@ -87,7 +108,7 @@
 </template>
 
 <script>
-import { deleteMessage, fetchMessage, htmlBodyUrl, setFlags } from '../api/mail.js'
+import { createPinnedTag, deleteMessage, fetchMessage, htmlBodyUrl, isPinned, PINNED_LABEL, PINNED_TAG_NAME, setFlags, setJunk, setPinned } from '../api/mail.js'
 import logger from '../logger.js'
 import { recallMessage, rememberMessage } from '../memory.js'
 import { accountFor, findMailbox, store } from '../store.js'
@@ -202,6 +223,14 @@ export default {
 			// remembered, until Mail's answer says
 			flagged: !!(listed?.flags?.flagged ?? message?.flags?.flagged),
 			flagging: false,
+			// Pinned: only the list says (Mail's answer for one message
+			// does not); unknown, so not shown as pinned, when the message
+			// was opened from a notification
+			pinned: isPinned(listed),
+			pinning: false,
+			movingJunk: false,
+			// Why the last action did not work
+			notice: null,
 		}
 	},
 
@@ -236,10 +265,23 @@ export default {
 			return this.message.attachments ?? []
 		},
 
-		canDelete() {
+		account() {
 			const mailbox = findMailbox(this.message.mailboxId)
-			const account = mailbox && accountFor(mailbox)
-			return !!(account && account.trashMailboxId)
+			return (mailbox && accountFor(mailbox)) || null
+		},
+
+		canDelete() {
+			return !!this.account?.trashMailboxId
+		},
+
+		// Junk needs the account's junk folder: Mail's server moves junk there
+		canJunk() {
+			return !!this.account?.junkMailboxId
+		},
+
+		// In the junk folder, the button says "Not junk"
+		inJunk() {
+			return !!this.account && this.message.mailboxId === this.account.junkMailboxId
 		},
 
 		ownAddresses() {
@@ -513,6 +555,71 @@ export default {
 			}
 		},
 
+		// Pin or unpin: shown at once, undone if Mail does not take it. The
+		// tag is asked for first: Mail makes it the first time, and only
+		// pins with a tag it has.
+		async togglePinned() {
+			if (this.pinning) {
+				return
+			}
+			const value = !this.pinned
+			this.pinned = value
+			this.pinning = true
+			this.notice = null
+			try {
+				if (value) {
+					const tag = await createPinnedTag()
+					if (tag?.id) {
+						this.store.pinnedTagId = tag.id
+					}
+				}
+				await setPinned(this.messageId, value)
+				const envelope = this.listedEnvelope()
+				if (envelope) {
+					const tags = { ...(Array.isArray(envelope.tags) ? {} : envelope.tags) }
+					if (value) {
+						tags[PINNED_LABEL] = { imapLabel: PINNED_LABEL, displayName: PINNED_TAG_NAME }
+					} else {
+						delete tags[PINNED_LABEL]
+					}
+					this.$set(envelope, 'tags', tags)
+				}
+				// The list on a wide screen reads its pinned messages again
+				this.$emit('pinned', value)
+			} catch (error) {
+				this.pinned = !value
+				logger.error('could not pin message', error)
+				this.notice = value
+					? this.t('mail_mobile', 'Could not pin the message.')
+					: this.t('mail_mobile', 'Could not unpin the message.')
+			} finally {
+				this.pinning = false
+			}
+		},
+
+		// Junk, or from the junk folder not junk. Mail's server moves the
+		// message (to the junk folder, or back to the inbox): back to the
+		// list, as after deleting.
+		async toggleJunk() {
+			if (this.movingJunk) {
+				return
+			}
+			const junk = !this.inJunk
+			this.movingJunk = true
+			this.notice = null
+			try {
+				await setJunk(this.messageId, junk)
+				this.$emit('deleted')
+			} catch (error) {
+				logger.error('could not change the junk mark', error)
+				this.notice = junk
+					? this.t('mail_mobile', 'Could not move the message to junk.')
+					: this.t('mail_mobile', 'Could not move the message to the inbox.')
+			} finally {
+				this.movingJunk = false
+			}
+		},
+
 		async markUnread() {
 			try {
 				await setFlags(this.messageId, { seen: false })
@@ -633,10 +740,19 @@ export default {
 	font-family: inherit;
 	font-size: 15px;
 }
+.reader__notice {
+	margin: 8px 16px 0;
+	padding: 10px 12px;
+	border-radius: var(--mob-radius);
+	background-color: var(--mob-hover);
+	color: var(--mob-danger);
+	font-size: 13px;
+}
 .reader__actions {
 	position: sticky;
 	bottom: 0;
 	display: flex;
+	flex-wrap: wrap;
 	gap: 8px;
 	padding: 10px 16px;
 	padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 10px);
@@ -671,5 +787,24 @@ export default {
 .reader__action--starred {
 	border-color: var(--mob-star);
 	color: var(--mob-star);
+}
+/* The pin: the same size as the star; faded until pinned */
+.reader__action--icon {
+	flex: 0 0 auto;
+	min-width: 44px;
+	font-size: 16px;
+	line-height: 1;
+}
+.reader__pin {
+	filter: grayscale(1);
+	opacity: 0.55;
+}
+.reader__action--pinned {
+	border-color: var(--mob-accent);
+	background-color: var(--mob-accent-soft);
+}
+.reader__action--pinned .reader__pin {
+	filter: none;
+	opacity: 1;
 }
 </style>

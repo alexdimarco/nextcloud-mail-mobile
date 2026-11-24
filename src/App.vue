@@ -30,14 +30,42 @@
 				@click="openCompose">
 				＋
 			</button>
+			<!-- Turns while the list checks for new mail -->
 			<button
 				v-if="route.view === 'list' || isWide"
 				class="mob__icon-btn"
+				:class="{ 'mob__icon-btn--busy': spinning || listBusy }"
 				:aria-label="t('mail_mobile', 'Refresh')"
-				@click="refreshTick++">
-				⟳
+				:aria-busy="spinning || listBusy ? 'true' : 'false'"
+				@click="refreshNow">
+				<svg
+					class="mob__refresh-icon"
+					viewBox="0 0 24 24"
+					width="22"
+					height="22"
+					aria-hidden="true"
+					focusable="false">
+					<path
+						d="M18.93 8A8 8 0 1 1 13.39 4.12"
+						fill="none"
+						stroke="currentColor"
+						stroke-width="2.2"
+						stroke-linecap="round" />
+					<path
+						d="M10.6 1.4L13.6 4.2L10.6 7"
+						fill="none"
+						stroke="currentColor"
+						stroke-width="2.2"
+						stroke-linecap="round"
+						stroke-linejoin="round" />
+				</svg>
 			</button>
 		</header>
+
+		<!-- What the refresh button found; read out by screen readers -->
+		<div class="mob__toast-area" role="status" aria-live="polite">
+			<span v-if="refreshNote" class="mob__toast">{{ refreshNote }}</span>
+		</div>
 
 		<button
 			v-if="stale"
@@ -105,11 +133,14 @@
 				<MailboxPicker v-if="route.view === 'boxes'" @open="openMailbox" />
 				<EnvelopeList
 					v-else-if="mailbox"
+					ref="list"
 					:key="mailbox.databaseId"
 					:mailbox="mailbox"
-					:refresh-tick="refreshTick"
+					:refresh-tick="refreshTick + listTick"
 					:selected-id="isWide ? store.currentEnvelope?.databaseId : null"
-					@open="openMessage" />
+					@open="openMessage"
+					@busy="onListBusy"
+					@refreshed="onListRefreshed" />
 				<div v-else-if="store.loading" class="mob__empty">
 					{{ t('mail_mobile', 'Loading your mail…') }}
 				</div>
@@ -143,6 +174,7 @@
 					:refresh-tick="refreshTick"
 					@reply="openComposerWith"
 					@forward="openComposerWith"
+					@pinned="listTick++"
 					@deleted="onDeleted" />
 				<!-- The sender list needs the accounts: after a reload (with a
 					message kept) the page can open here before they arrive -->
@@ -178,6 +210,11 @@ import { AS_TEXT } from './l10nText.js'
 import { forgetMessage, rememberSearch } from './memory.js'
 import { defaultMailbox, findMailbox, loadAccounts, store } from './store.js'
 
+// The refresh button turns at least this long, so a quick check is seen
+const MIN_SPIN_MS = 700
+// How long "Up to date" stays
+const NOTE_MS = 2500
+
 export default {
 	name: 'App',
 	components: { EnvelopeList, MailboxPicker, Reader, Composer },
@@ -187,6 +224,17 @@ export default {
 			store,
 			route: this.parseHash(),
 			refreshTick: 0,
+			// Raised when only the list must read again (a message was pinned)
+			listTick: 0,
+			// The list is refreshing; the refresh button was just tapped;
+			// a refresh it started has not finished yet; what it found
+			listBusy: false,
+			spinning: false,
+			checking: false,
+			spinDone: null,
+			refreshNote: null,
+			spinTimer: null,
+			noteTimer: null,
 			fullAppUrl: generateUrl('/apps/mail/'),
 			wideQuery: window.matchMedia('(min-width: 900px)'),
 			isWide: window.matchMedia('(min-width: 900px)').matches,
@@ -246,6 +294,8 @@ export default {
 	beforeDestroy() {
 		window.removeEventListener('hashchange', this.onHashChange)
 		this.wideQuery.removeEventListener('change', this.onWideChange)
+		clearTimeout(this.spinTimer)
+		clearTimeout(this.noteTimer)
 	},
 
 	methods: {
@@ -296,6 +346,51 @@ export default {
 			this.pendingLeave = null
 			this.$refs.composer?.discard()
 			proceed?.()
+		},
+
+		// The refresh button: everything on screen asks Mail again. The
+		// button turns while the list checks for new mail, and says what
+		// it found once done.
+		refreshNow() {
+			this.refreshTick++
+			if (!this.$refs.list) {
+				return
+			}
+			this.checking = true
+			this.spinning = true
+			this.refreshNote = null
+			clearTimeout(this.noteTimer)
+			clearTimeout(this.spinTimer)
+			this.spinDone = new Promise((resolve) => {
+				this.spinTimer = setTimeout(() => {
+					this.spinning = false
+					resolve()
+				}, MIN_SPIN_MS)
+			})
+		},
+
+		onListBusy(busy) {
+			this.listBusy = busy
+			// The list went away before its check finished (it says it is
+			// done before that): nothing to report
+			if (!busy) {
+				this.checking = false
+			}
+		},
+
+		async onListRefreshed(checked) {
+			if (!this.checking) {
+				return
+			}
+			this.checking = false
+			await this.spinDone
+			this.refreshNote = checked
+				? this.t('mail_mobile', 'Up to date')
+				: this.t('mail_mobile', 'Could not check for new mail')
+			clearTimeout(this.noteTimer)
+			this.noteTimer = setTimeout(() => {
+				this.refreshNote = null
+			}, NOTE_MS)
 		},
 
 		onWideChange(event) {
@@ -533,6 +628,43 @@ body#body-public.layout-base #content.app-public {
 }
 .mob__icon-btn:active {
 	background-color: var(--mob-hover);
+}
+.mob__refresh-icon {
+	display: block;
+	margin: auto;
+}
+.mob__icon-btn--busy .mob__refresh-icon {
+	animation: mob-turn 0.8s linear infinite;
+}
+@keyframes mob-turn {
+	to {
+		transform: rotate(360deg);
+	}
+}
+@media (prefers-reduced-motion: reduce) {
+	/* No turning: the button fades while busy, and the note still shows */
+	.mob__icon-btn--busy .mob__refresh-icon {
+		animation: none;
+		opacity: 0.4;
+	}
+}
+/* Under the top bar, over the list, without moving it */
+.mob__toast-area {
+	position: fixed;
+	z-index: 20;
+	inset-inline: 0;
+	top: calc(env(safe-area-inset-top, 0px) + 68px);
+	display: flex;
+	justify-content: center;
+	pointer-events: none;
+}
+.mob__toast {
+	padding: 8px 14px;
+	border-radius: 999px;
+	background-color: var(--mob-text);
+	color: var(--mob-bg);
+	font-size: 13px;
+	box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
 }
 .mob__update {
 	display: block;

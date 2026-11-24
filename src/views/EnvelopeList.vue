@@ -71,6 +71,15 @@
 				📁
 			</button>
 			<button
+				v-if="canJunk"
+				class="selectbar__icon"
+				:disabled="selection.length === 0"
+				:aria-label="inJunk ? t('mail_mobile', 'Not junk: move to the inbox') : t('mail_mobile', 'Move to junk')"
+				:title="inJunk ? t('mail_mobile', 'Not junk: move to the inbox') : t('mail_mobile', 'Move to junk')"
+				@click="bulkJunk">
+				{{ inJunk ? '📥' : '🚫' }}
+			</button>
+			<button
 				v-if="canDelete"
 				class="selectbar__icon selectbar__icon--danger"
 				:disabled="selection.length === 0"
@@ -103,8 +112,19 @@
 		</div>
 
 		<template v-for="row in displayRows">
+			<div
+				v-if="row.section"
+				:key="'s-' + row.section"
+				class="list__section">
+				<template v-if="row.section === 'pinned'">
+					<span aria-hidden="true">📌</span> {{ t('mail_mobile', 'Pinned') }}
+				</template>
+				<template v-else>
+					{{ t('mail_mobile', 'Everything else') }}
+				</template>
+			</div>
 			<button
-				v-if="row.header"
+				v-else-if="row.header"
 				:key="'h' + row.envelope.databaseId"
 				class="row row--thread-header"
 				@click="collapse(row.envelope.databaseId)">
@@ -161,6 +181,11 @@
 							<span class="row__date">{{ formatDate(row.envelope.dateInt) }}</span>
 						</span>
 						<span class="row__subject">
+							<span
+								v-if="isPinned(row.envelope)"
+								class="row__pin"
+								role="img"
+								:aria-label="t('mail_mobile', 'Pinned')">📌</span>
 							<span v-if="row.envelope.flags.flagged" class="row__star">★</span>
 							<span v-if="row.envelope.flags.hasAttachments" class="row__clip">📎</span>
 							{{ row.envelope.subject || t('mail_mobile', '(No subject)') }}
@@ -206,7 +231,7 @@
 </template>
 
 <script>
-import { deleteMessage, fetchEnvelopes, fetchThread, looksLikeConversation, moveMessage, searchFilter, syncMailbox } from '../api/mail.js'
+import { deleteMessage, fetchEnvelopes, fetchThread, isPinned, looksLikeConversation, moveMessage, pinnedFilter, searchFilter, setJunk, syncMailbox } from '../api/mail.js'
 import { AS_TEXT } from '../l10nText.js'
 import logger from '../logger.js'
 import { recallList, recallSearch, rememberList, rememberSearch } from '../memory.js'
@@ -237,6 +262,36 @@ function scrollParent(element) {
 		}
 	}
 	return null
+}
+
+/**
+ * The rows for some messages: one per message in flat view; in threaded
+ * view, a conversation row per thread, with an expanded thread's messages
+ * right after it (and its row shown as a slim header while expanded).
+ *
+ * @param {Array} envelopes the messages
+ * @param {object} view how the list is shown
+ * @param {boolean} view.threaded whether conversations are grouped
+ * @param {Array<number>} view.expandedIds the expanded conversations
+ * @param {object} view.threadChildren the messages of each expanded conversation
+ * @return {Array<object>} the rows
+ */
+function rowsFor(envelopes, { threaded, expandedIds, threadChildren }) {
+	if (!threaded) {
+		return envelopes.map((envelope) => ({ envelope, child: false, header: false }))
+	}
+	const rows = []
+	for (const envelope of envelopes) {
+		const expanded = expandedIds.includes(envelope.databaseId)
+		const children = threadChildren[envelope.databaseId] ?? []
+		rows.push({ envelope, child: false, header: expanded, expanded, count: children.length })
+		if (expanded) {
+			for (const child of children) {
+				rows.push({ envelope: child, child: true, header: false })
+			}
+		}
+	}
+	return rows
 }
 
 const LONG_PRESS_MS = 500
@@ -275,7 +330,13 @@ export default {
 			searchText,
 			searchTimer: null,
 			envelopes: remembered ? [...remembered.envelopes] : [],
+			// The folder's pinned messages, shown above the rest when not
+			// searching
+			pinned: remembered?.pinned ? [...remembered.pinned] : [],
 			loading: false,
+			// A refresh is running: told to the page, which turns its
+			// refresh button while it does
+			refreshing: false,
 			// Mail is checking the mail server for new mail, in the background
 			syncing: false,
 			syncSlow: false,
@@ -319,24 +380,31 @@ export default {
 			return store.threaded
 		},
 
-		// The rows to render: in flat view, one per message; in threaded
-		// view, a conversation row per thread, with an expanded thread's
-		// messages interleaved right after it (and its row shown as a slim
-		// header while expanded).
-		displayRows() {
-			if (!this.threaded) {
-				return this.envelopes.map((envelope) => ({ envelope, child: false, header: false }))
+		// The messages below the pinned ones: a pinned message (or, with
+		// conversations grouped, its conversation) is shown once, on top
+		rest() {
+			if (this.pinned.length === 0) {
+				return this.envelopes
 			}
-			const rows = []
-			for (const envelope of this.envelopes) {
-				const expanded = this.expandedIds.includes(envelope.databaseId)
-				const children = this.threadChildren[envelope.databaseId] ?? []
-				rows.push({ envelope, child: false, header: expanded, expanded, count: children.length })
-				if (expanded) {
-					for (const child of children) {
-						rows.push({ envelope: child, child: true, header: false })
-					}
-				}
+			const pinnedKeys = new Set(this.pinned.map(this.rowKey))
+			return this.envelopes.filter((envelope) => !pinnedKeys.has(this.rowKey(envelope)))
+		},
+
+		// Every message shown, pinned first
+		listed() {
+			return [...this.pinned, ...this.rest]
+		},
+
+		// The rows to render: the pinned messages under their heading, then
+		// the rest (under a heading of their own when there are pinned ones)
+		displayRows() {
+			const view = { threaded: this.threaded, expandedIds: this.expandedIds, threadChildren: this.threadChildren }
+			if (this.pinned.length === 0) {
+				return rowsFor(this.envelopes, view)
+			}
+			const rows = [{ section: 'pinned' }, ...rowsFor(this.pinned, view)]
+			if (this.rest.length > 0) {
+				rows.push({ section: 'rest' }, ...rowsFor(this.rest, view))
 			}
 			return rows
 		},
@@ -346,7 +414,7 @@ export default {
 		// view (conversation headers are not individually selectable)
 		selectableIds() {
 			if (!this.threaded) {
-				return this.envelopes.map((envelope) => envelope.databaseId)
+				return this.listed.map((envelope) => envelope.databaseId)
 			}
 			return this.expandedIds.flatMap((id) => (this.threadChildren[id] ?? []).map((child) => child.databaseId))
 		},
@@ -377,6 +445,18 @@ export default {
 			return !!this.account?.archiveMailboxId && this.mailbox.databaseId !== this.account.archiveMailboxId
 		},
 
+		// Junk needs the account's junk folder, as Mail's server moves junk
+		// there (set in the full Mail app's account settings, or found by
+		// Mail when the mail server marks one)
+		canJunk() {
+			return !!this.account?.junkMailboxId
+		},
+
+		// In the junk folder, the same button says "not junk"
+		inJunk() {
+			return this.mailbox.databaseId === this.account?.junkMailboxId
+		},
+
 		moveDestinations() {
 			return (this.account?.mailboxes ?? []).filter((box) => box.databaseId !== this.mailbox.databaseId)
 		},
@@ -398,6 +478,14 @@ export default {
 
 		envelopes() {
 			this.keepList()
+		},
+
+		pinned() {
+			this.keepList()
+		},
+
+		refreshing(value) {
+			this.$emit('busy', value)
 		},
 
 		exhausted() {
@@ -431,6 +519,9 @@ export default {
 	},
 
 	beforeDestroy() {
+		if (this.refreshing) {
+			this.$emit('busy', false)
+		}
 		document.removeEventListener('visibilitychange', this.onVisible)
 		clearTimeout(this.longPressTimer)
 		clearTimeout(this.searchTimer)
@@ -443,18 +534,35 @@ export default {
 			}
 		},
 
-		// Two steps, so a slow connection or mail server never leaves the
-		// list blank: first the list Mail already has, shown at once; then
-		// Mail checks the mail server for new mail, and the list is read
-		// again. Messages already on screen stay there if either fails.
+		// Read the list again; then tell the page it is done, and whether
+		// checking for new mail worked
 		async refresh() {
 			const run = ++this.refreshRun
+			this.refreshing = true
+			const checked = await this.readList(run)
+			if (run === this.refreshRun) {
+				this.refreshing = false
+				this.$emit('refreshed', checked)
+			}
+		},
+
+		/**
+		 * Two steps, so a slow connection or mail server never leaves the
+		 * list blank: first the list Mail already has, shown at once; then
+		 * Mail checks the mail server for new mail, and the list is read
+		 * again. Messages already on screen stay there if either fails.
+		 *
+		 * @param {number} run this refresh's number
+		 * @return {Promise<boolean>} whether Mail checked for new mail and the list was read again
+		 */
+		async readList(run) {
 			const mailboxId = this.mailbox.databaseId
 			const filter = this.filter
 			let firstReadFailed = false
 			this.loading = true
 			try {
-				this.showList(await fetchEnvelopes(mailboxId, undefined, this.threaded, filter) ?? [], run)
+				const { page, pinned } = await this.readFirstPage(mailboxId, filter)
+				this.showList(page, run, pinned)
 			} catch (error) {
 				logger.error('could not load envelopes', error)
 				firstReadFailed = true
@@ -465,7 +573,7 @@ export default {
 					if (run === this.refreshRun) {
 						this.loadFailed = this.envelopes.length === 0
 					}
-					return
+					return false
 				}
 			} finally {
 				if (run === this.refreshRun) {
@@ -473,7 +581,7 @@ export default {
 				}
 			}
 			if (run !== this.refreshRun) {
-				return
+				return false
 			}
 			this.syncing = true
 			const slow = setTimeout(() => {
@@ -481,12 +589,15 @@ export default {
 			}, SLOW_SYNC_MS)
 			try {
 				await syncMailbox(mailboxId)
-				this.showList(await fetchEnvelopes(mailboxId, undefined, this.threaded, filter) ?? [], run)
+				const { page, pinned } = await this.readFirstPage(mailboxId, filter)
+				this.showList(page, run, pinned)
+				return true
 			} catch (error) {
 				logger.warn('could not check for new mail, showing the messages Mail already had', error)
 				if (firstReadFailed && run === this.refreshRun) {
 					this.loadFailed = this.envelopes.length === 0
 				}
+				return false
 			} finally {
 				clearTimeout(slow)
 				if (run === this.refreshRun) {
@@ -496,10 +607,48 @@ export default {
 			}
 		},
 
+		/**
+		 * The first page of the list, and the folder's pinned messages.
+		 *
+		 * @param {number} mailboxId the folder
+		 * @param {string} filter the search; '' for none
+		 * @return {Promise<{page: Array, pinned: Array|null}>} the messages
+		 */
+		async readFirstPage(mailboxId, filter) {
+			const threaded = this.threaded
+			const [page, pinned] = await Promise.all([
+				fetchEnvelopes(mailboxId, undefined, threaded, filter),
+				this.readPinned(mailboxId, threaded, filter),
+			])
+			return { page: page ?? [], pinned }
+		},
+
+		/**
+		 * The folder's pinned messages: none while searching (the results
+		 * show their mark instead), or before anything was pinned.
+		 *
+		 * @param {number} mailboxId the folder
+		 * @param {boolean} threaded whether conversations are grouped
+		 * @param {string} filter the search; '' for none
+		 * @return {Promise<Array|null>} the messages; null when they could not be read, to keep those shown
+		 */
+		async readPinned(mailboxId, threaded, filter) {
+			const tagId = store.pinnedTagId
+			if (filter !== '' || !tagId) {
+				return []
+			}
+			try {
+				return await fetchEnvelopes(mailboxId, undefined, threaded, pinnedFilter(tagId)) ?? []
+			} catch (error) {
+				logger.warn('could not read the pinned messages', error)
+				return null
+			}
+		},
+
 		// Show a freshly read first page without undoing what the person is
 		// doing: older messages loaded with "Load more", open conversations
 		// and selected messages stay, as long as they are still there.
-		showList(page, run) {
+		showList(page, run, pinned = null) {
 			if (run !== this.refreshRun) {
 				return
 			}
@@ -510,8 +659,11 @@ export default {
 				: []
 			this.envelopes = [...page, ...older]
 			this.exhausted = older.length > 0 ? this.exhausted : page.length < PAGE_SIZE
+			if (pinned !== null) {
+				this.pinned = pinned
+			}
 			this.loadFailed = false
-			const shown = new Set(this.envelopes.map((envelope) => envelope.databaseId))
+			const shown = new Set(this.listed.map((envelope) => envelope.databaseId))
 			this.expandedIds = this.expandedIds.filter((id) => shown.has(id))
 			this.threadChildren = Object.fromEntries(Object.entries(this.threadChildren)
 				.filter(([id]) => shown.has(Number(id))))
@@ -520,7 +672,7 @@ export default {
 		},
 
 		keepList() {
-			rememberList(this.mailbox.databaseId, this.threaded, { envelopes: this.envelopes, exhausted: this.exhausted }, this.searchText)
+			rememberList(this.mailbox.databaseId, this.threaded, { envelopes: this.envelopes, pinned: this.pinned, exhausted: this.exhausted }, this.searchText)
 		},
 
 		// Before opening a message: where the list was, for coming back
@@ -542,6 +694,7 @@ export default {
 			rememberSearch(this.mailbox.databaseId, text)
 			const remembered = recallList(this.mailbox.databaseId, this.threaded, text)
 			this.envelopes = remembered ? [...remembered.envelopes] : []
+			this.pinned = remembered?.pinned ? [...remembered.pinned] : []
 			this.exhausted = remembered?.exhausted ?? false
 			this.expandedIds = []
 			this.threadChildren = {}
@@ -573,6 +726,16 @@ export default {
 			} finally {
 				this.loading = false
 			}
+		},
+
+		isPinned,
+
+		// What makes two rows the same entry: the message, or with
+		// conversations grouped, its conversation
+		rowKey(envelope) {
+			return this.threaded && envelope.threadRootId
+				? 'thread:' + envelope.threadRootId
+				: 'message:' + envelope.databaseId
 		},
 
 		senderOf(envelope) {
@@ -626,6 +789,7 @@ export default {
 			setThreaded(!this.threaded)
 			const remembered = recallList(this.mailbox.databaseId, this.threaded, this.searchText)
 			this.envelopes = remembered ? [...remembered.envelopes] : []
+			this.pinned = remembered?.pinned ? [...remembered.pinned] : []
 			this.exhausted = remembered?.exhausted ?? false
 			this.expandedIds = []
 			this.threadChildren = {}
@@ -861,6 +1025,7 @@ export default {
 		removeIdsFromView(ids) {
 			const set = new Set(ids)
 			this.envelopes = this.envelopes.filter((envelope) => !set.has(envelope.databaseId))
+			this.pinned = this.pinned.filter((envelope) => !set.has(envelope.databaseId))
 			let changed = false
 			const next = {}
 			for (const id of Object.keys(this.threadChildren)) {
@@ -907,6 +1072,25 @@ export default {
 			const failed = await this.runBulk(ids, (id) => moveMessage(id, destination))
 			if (failed > 0) {
 				this.notice = this.n('mail', 'Could not archive {count} message', 'Could not archive {count} messages', failed, { count: failed })
+				this.refresh()
+			}
+		},
+
+		// Junk, or in the junk folder not junk: Mail's server moves them to
+		// the junk folder, or back to the inbox
+		async bulkJunk() {
+			if (!this.canJunk || this.selection.length === 0) {
+				return
+			}
+			const ids = [...this.selection]
+			const junk = !this.inJunk
+			this.removeIdsFromView(ids)
+			this.exitSelection()
+			const failed = await this.runBulk(ids, (id) => setJunk(id, junk))
+			if (failed > 0) {
+				this.notice = junk
+					? this.n('mail', 'Could not move {count} message to junk', 'Could not move {count} messages to junk', failed, { count: failed })
+					: this.n('mail', 'Could not move {count} message to the inbox', 'Could not move {count} messages to the inbox', failed, { count: failed })
 				this.refresh()
 			}
 		},
@@ -972,6 +1156,15 @@ export default {
 .list__syncing {
 	padding: 4px 16px;
 	font-size: 12px;
+	color: var(--mob-text-muted);
+}
+/* "Pinned" above the pinned messages, "Everything else" below them */
+.list__section {
+	padding: 10px 16px 4px;
+	font-size: 12px;
+	font-weight: 600;
+	letter-spacing: 0.02em;
+	text-transform: uppercase;
 	color: var(--mob-text-muted);
 }
 .list__notice {
@@ -1239,6 +1432,9 @@ export default {
 }
 .row__star {
 	color: var(--mob-star);
+}
+.row__pin {
+	font-size: 12px;
 }
 .row__clip {
 	font-size: 12px;

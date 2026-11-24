@@ -42,6 +42,9 @@ export const store = Vue.observable({
 	// show sender and subject in notifications (off unless chosen)
 	showDetails: loadState('mail_mobile', 'show-details', false),
 	sourceUrl: loadState('mail_mobile', 'source-url', ''),
+	// The id of the person's "Pinned" tag in Mail; null until something
+	// is first pinned
+	pinnedTagId: loadState('mail_mobile', 'pinned-tag', null),
 	buildVersion,
 	// Group the message list by conversation (threaded view). Saved.
 	threaded: readFlag('mail_mobile-threaded'),

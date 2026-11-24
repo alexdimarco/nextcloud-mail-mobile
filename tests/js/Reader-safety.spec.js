@@ -14,6 +14,12 @@ vi.mock('../../src/api/mail.js', () => ({
 	setFlags: vi.fn(),
 	deleteMessage: vi.fn(),
 	htmlBodyUrl: (id) => `/html/${id}`,
+	createPinnedTag: vi.fn(),
+	setPinned: vi.fn(),
+	setJunk: vi.fn(),
+	isPinned: (envelope) => !!envelope?.tags?.$pinned,
+	PINNED_LABEL: '$pinned',
+	PINNED_TAG_NAME: 'Pinned',
 }))
 
 vi.mock('../../src/store.js', () => ({

@@ -7,17 +7,22 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
 	autocomplete,
 	createAlias,
+	createPinnedTag,
 	fetchEnvelopes,
 	fetchMailboxes,
 	isMailLoginError,
 	isNoAnswer,
+	isPinned,
 	looksLikeConversation,
 	page,
+	pinnedFilter,
 	REAUTH_ATTEMPT_KEY,
 	reauthenticate,
 	searchFilter,
 	SEND_TIME_LIMIT_MS,
 	sendMessage,
+	setJunk,
+	setPinned,
 	SYNC_TIME_LIMIT_MS,
 	syncMailbox,
 	TIME_LIMIT_MS,
@@ -124,6 +129,60 @@ describe('conversation hint', () => {
 		expect(looksLikeConversation({ messageId: '<a@x>', threadRootId: '<a@x>' })).toBe(false)
 		expect(looksLikeConversation({ messageId: '<a@x>' })).toBe(false)
 		expect(looksLikeConversation(null)).toBe(false)
+	})
+})
+
+describe('junk and pin', () => {
+	beforeEach(() => {
+		Object.values(axiosMock).forEach((mock) => mock.mockReset())
+	})
+
+	it('marks junk as Mail\'s own "Mark as spam" does, in Mail\'s order', async () => {
+		axiosMock.put.mockResolvedValue({ data: {} })
+
+		await setJunk(5, true)
+		await setJunk(6, false)
+
+		expect(axiosMock.put.mock.calls[0]).toEqual(['/index.php/apps/mail/api/messages/5/flags', { flags: { $junk: true, $notjunk: false } }, { timeout: TIME_LIMIT_MS }])
+		expect(Object.keys(axiosMock.put.mock.calls[0][1].flags)).toEqual(['$junk', '$notjunk'])
+		expect(axiosMock.put.mock.calls[1][1]).toEqual({ flags: { $junk: false, $notjunk: true } })
+	})
+
+	it('asks Mail for its "Pinned" tag, by a name that is never translated', async () => {
+		axiosMock.post.mockResolvedValueOnce({ data: { id: 9, imapLabel: '$pinned', displayName: 'Pinned' } })
+
+		await expect(createPinnedTag()).resolves.toEqual({ id: 9, imapLabel: '$pinned', displayName: 'Pinned' })
+		expect(axiosMock.post).toHaveBeenCalledWith('/index.php/apps/mail/api/tags', { displayName: 'Pinned', color: '#2f6fed' }, { timeout: TIME_LIMIT_MS })
+	})
+
+	it('pins and unpins with the tag\'s mark', async () => {
+		axiosMock.put.mockResolvedValue({ data: {} })
+		axiosMock.delete.mockResolvedValue({ data: {} })
+
+		await setPinned(5, true)
+		await setPinned(5, false)
+
+		expect(axiosMock.put).toHaveBeenCalledWith('/index.php/apps/mail/api/messages/5/tags/%24pinned', undefined, { timeout: TIME_LIMIT_MS })
+		expect(axiosMock.delete).toHaveBeenCalledWith('/index.php/apps/mail/api/messages/5/tags/%24pinned', { timeout: TIME_LIMIT_MS })
+	})
+
+	it('says when pinning did not work', async () => {
+		axiosMock.put.mockRejectedValueOnce(httpError(403))
+		await expect(setPinned(5, true)).rejects.toThrow()
+	})
+
+	it('finds the pinned messages by the tag\'s id', () => {
+		expect(pinnedFilter(9)).toBe('tags:9')
+		expect(pinnedFilter('9 from:x')).toBe('tags:NaN')
+	})
+
+	it('reads the pin from the tags Mail lists with a message', () => {
+		expect(isPinned({ tags: { $pinned: { id: 9 } } })).toBe(true)
+		expect(isPinned({ tags: { $label1: { id: 1 } } })).toBe(false)
+		// Mail sends [] for a message with no tags
+		expect(isPinned({ tags: [] })).toBe(false)
+		expect(isPinned({})).toBe(false)
+		expect(isPinned(null)).toBe(false)
 	})
 })
 

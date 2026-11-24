@@ -9,9 +9,11 @@ declare(strict_types=1);
 
 namespace OCA\MailMobile\Mail;
 
+use OCA\Mail\Db\TagMapper;
 use OCA\Mail\Events\NewMessagesSynchronized;
 use OCA\Mail\Service\MailManager;
 use OCP\App\IAppManager;
+use OCP\AppFramework\Db\DoesNotExistException;
 use OCP\EventDispatcher\Event;
 use OCP\IL10N;
 use OCP\IUserManager;
@@ -52,6 +54,13 @@ class MailBridge {
 
 	/** At most this many message ids are carried into one notification job */
 	public const MAX_MESSAGES = 3;
+
+	/**
+	 * The mark Mail gives its tag named "Pinned" on the mail server
+	 * (Mail's ImapFlag::create: "$" and the name in lower case). The phone
+	 * page pins a message with this tag; see src/api/mail.js.
+	 */
+	public const PINNED_LABEL = '$pinned';
 
 	/** @var list<class-string> Mail classes this app depends on */
 	private const REQUIRED_CLASSES = [
@@ -158,6 +167,26 @@ class MailBridge {
 			);
 		} catch (Throwable $e) {
 			$this->logger->warning('Could not read the new-mail event from Mail: ' . $e->getMessage(), ['exception' => $e]);
+			return null;
+		}
+	}
+
+	/**
+	 * The id of the person's "Pinned" tag in Mail, so the phone page can
+	 * list the pinned messages of a folder. The tag is never made here:
+	 * the phone page asks Mail for it when something is first pinned.
+	 *
+	 * @return ?int null when there is no such tag yet, or it cannot be read
+	 */
+	public function pinnedTagId(string $userId): ?int {
+		try {
+			/** @var TagMapper $tags */
+			$tags = $this->container->get(TagMapper::class);
+			return (int)$tags->getTagByImapLabel(self::PINNED_LABEL, $userId)->getId();
+		} catch (DoesNotExistException) {
+			return null;
+		} catch (Throwable $e) {
+			$this->logger->info('Could not read the Pinned tag through Mail: ' . $e->getMessage());
 			return null;
 		}
 	}

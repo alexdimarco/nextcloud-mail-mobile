@@ -46,10 +46,13 @@ vi.mock('../../src/api/mail.js', () => ({
 	// The real one is tested in mail-api.spec.js
 	searchFilter: vi.fn((text, { body = false } = {}) => (text ? `search:${text}${body ? ':body' : ''}` : '')),
 	syncMailbox: vi.fn().mockResolvedValue(undefined),
+	setJunk: vi.fn().mockResolvedValue(undefined),
+	pinnedFilter: vi.fn((tagId) => `tags:${tagId}`),
+	isPinned: (envelope) => !!envelope?.tags?.$pinned,
 }))
 
 // hoisted so the (hoisted) vi.mock factory below can close over it
-const storeMock = vi.hoisted(() => ({ threaded: false }))
+const storeMock = vi.hoisted(() => ({ threaded: false, pinnedTagId: null }))
 
 vi.mock('../../src/store.js', () => ({
 	accountFor: vi.fn(() => ACCOUNT),
@@ -813,5 +816,303 @@ describe('mobile EnvelopeList search', () => {
 		await wrapper.vm.$nextTick()
 
 		expect(wrapper.find('form.search').exists()).toBe(false)
+	})
+})
+
+describe('mobile EnvelopeList pinned messages', () => {
+	let api
+
+	const PINNED_TAGS = { $pinned: { id: 9, imapLabel: '$pinned', displayName: 'Pinned' } }
+
+	async function flush() {
+		for (let i = 0; i < 8; i++) {
+			await Promise.resolve()
+		}
+	}
+
+	async function mount(mailbox = INBOX) {
+		const instance = shallowMount(EnvelopeList, {
+			propsData: { mailbox },
+			mocks: l10nMocks,
+		})
+		instance.vm.wait = () => Promise.resolve()
+		await flush()
+		return instance
+	}
+
+	// Mail's answers: the pinned messages for the "Pinned" tag, else the folder
+	function answer({ folder, pinned }) {
+		api.fetchEnvelopes.mockImplementation(async (mailboxId, cursor, threaded, filter) => (filter === 'tags:9'
+			? pinned.map((item) => ({ ...item }))
+			: folder.map((item) => ({ ...item }))))
+	}
+
+	function shownRows(wrapper) {
+		return wrapper.vm.displayRows.map((row) => row.section ?? row.envelope.databaseId)
+	}
+
+	beforeEach(async () => {
+		vi.clearAllMocks()
+		forgetEverything()
+		storeMock.threaded = false
+		storeMock.pinnedTagId = 9
+		api = await import('../../src/api/mail.js')
+		api.fetchEnvelopes.mockReset()
+		api.syncMailbox.mockReset()
+		api.syncMailbox.mockResolvedValue(undefined)
+		answer({
+			folder: [envelope(101), envelope(102), envelope(103, { tags: PINNED_TAGS })],
+			pinned: [envelope(103, { tags: PINNED_TAGS })],
+		})
+	})
+
+	afterEach(() => {
+		storeMock.pinnedTagId = null
+	})
+
+	it('shows the pinned messages first, under their heading, and each message once', async () => {
+		const wrapper = await mount()
+
+		expect(api.fetchEnvelopes).toHaveBeenCalledWith(INBOX.databaseId, undefined, false, 'tags:9')
+		expect(shownRows(wrapper)).toEqual(['pinned', 103, 'rest', 101, 102])
+		expect(wrapper.find('.list__section').text()).toContain('Pinned')
+		expect(wrapper.findAll('.row__pin')).toHaveLength(1)
+	})
+
+	it('shows no heading when nothing in the folder is pinned', async () => {
+		answer({ folder: [envelope(101), envelope(102)], pinned: [] })
+		const wrapper = await mount()
+
+		expect(shownRows(wrapper)).toEqual([101, 102])
+		expect(wrapper.find('.list__section').exists()).toBe(false)
+	})
+
+	it('does not ask for pinned messages before anything was ever pinned', async () => {
+		storeMock.pinnedTagId = null
+		answer({ folder: [envelope(101), envelope(102)], pinned: [] })
+		const wrapper = await mount()
+
+		expect(api.fetchEnvelopes.mock.calls.every((call) => call[3] === '')).toBe(true)
+		expect(shownRows(wrapper)).toEqual([101, 102])
+	})
+
+	it('shows search results in their own order, with the pin mark and no heading', async () => {
+		const wrapper = await mount()
+		api.fetchEnvelopes.mockClear()
+
+		wrapper.vm.query = 'Subject'
+		wrapper.vm.applySearch()
+		await flush()
+
+		expect(api.fetchEnvelopes.mock.calls.some((call) => call[3] === 'tags:9')).toBe(false)
+		expect(shownRows(wrapper)).toEqual([101, 102, 103])
+		expect(wrapper.findAll('.row__pin')).toHaveLength(1)
+	})
+
+	it('keeps the pinned messages shown when they cannot be read this time', async () => {
+		const wrapper = await mount()
+		api.fetchEnvelopes.mockImplementation(async (mailboxId, cursor, threaded, filter) => {
+			if (filter === 'tags:9') {
+				throw new Error('no answer')
+			}
+			return [envelope(101), envelope(102), envelope(103, { tags: PINNED_TAGS })]
+		})
+
+		await wrapper.vm.refresh()
+
+		expect(shownRows(wrapper)).toEqual(['pinned', 103, 'rest', 101, 102])
+	})
+
+	it('shows a pinned conversation once, on top, with conversations grouped', async () => {
+		storeMock.threaded = true
+		answer({
+			folder: [envelope(201, { threadRootId: '<a@x>', messageId: '<a2@x>' }), envelope(301, { threadRootId: '<b@x>', messageId: '<b@x>' })],
+			pinned: [envelope(200, { threadRootId: '<a@x>', messageId: '<a@x>', tags: PINNED_TAGS })],
+		})
+		const wrapper = await mount()
+
+		expect(api.fetchEnvelopes).toHaveBeenCalledWith(INBOX.databaseId, undefined, true, 'tags:9')
+		expect(shownRows(wrapper)).toEqual(['pinned', 200, 'rest', 301])
+	})
+
+	it('takes an archived or deleted pinned message off the screen at once', async () => {
+		const wrapper = await mount()
+
+		wrapper.vm.removeIdsFromView([103])
+
+		expect(shownRows(wrapper)).toEqual([101, 102])
+	})
+
+	it('can select a pinned message with the others', async () => {
+		const wrapper = await mount()
+
+		wrapper.vm.toggleSelectAll()
+
+		expect(wrapper.vm.selection).toEqual([103, 101, 102])
+	})
+
+	it('remembers the pinned messages for coming back from a message', async () => {
+		await mount()
+
+		expect(recallList(INBOX.databaseId, false).pinned.map((item) => item.databaseId)).toEqual([103])
+	})
+})
+
+describe('mobile EnvelopeList junk', () => {
+	let api
+
+	const JUNK = { databaseId: 7, accountId: 1, displayName: 'Junk' }
+
+	async function flush() {
+		for (let i = 0; i < 8; i++) {
+			await Promise.resolve()
+		}
+	}
+
+	async function mount(mailbox = INBOX) {
+		const instance = shallowMount(EnvelopeList, {
+			propsData: { mailbox },
+			mocks: l10nMocks,
+		})
+		await flush()
+		return instance
+	}
+
+	beforeEach(async () => {
+		vi.clearAllMocks()
+		forgetEverything()
+		storeMock.threaded = false
+		ACCOUNT.junkMailboxId = 7
+		api = await import('../../src/api/mail.js')
+		api.fetchEnvelopes.mockReset()
+		api.fetchEnvelopes.mockResolvedValue([envelope(101), envelope(102), envelope(103)])
+		api.syncMailbox.mockResolvedValue(undefined)
+		api.setJunk.mockReset()
+		api.setJunk.mockResolvedValue(undefined)
+	})
+
+	afterEach(() => {
+		delete ACCOUNT.junkMailboxId
+	})
+
+	it('moves the selected messages to junk', async () => {
+		const wrapper = await mount()
+		wrapper.vm.toggleSelection(101)
+		wrapper.vm.toggleSelection(103)
+		await wrapper.vm.$nextTick()
+
+		const button = wrapper.find('[aria-label="Move to junk"]')
+		expect(button.text()).toBe('🚫')
+		await button.trigger('click')
+		await flush()
+
+		expect(api.setJunk.mock.calls).toEqual([[101, true], [103, true]])
+		expect(wrapper.vm.envelopes.map((item) => item.databaseId)).toEqual([102])
+		expect(wrapper.vm.selectionMode).toBe(false)
+	})
+
+	it('in the junk folder, moves them back to the inbox as not junk', async () => {
+		const wrapper = await mount(JUNK)
+		wrapper.vm.toggleSelection(102)
+		await wrapper.vm.$nextTick()
+
+		await wrapper.find('[aria-label="Not junk: move to the inbox"]').trigger('click')
+		await flush()
+
+		expect(api.setJunk).toHaveBeenCalledWith(102, false)
+	})
+
+	it('is not offered when the account has no junk folder', async () => {
+		delete ACCOUNT.junkMailboxId
+		const wrapper = await mount()
+		wrapper.vm.enterSelectionMode()
+		await wrapper.vm.$nextTick()
+
+		expect(wrapper.find('[aria-label="Move to junk"]').exists()).toBe(false)
+	})
+
+	it('says how many could not be moved, and reads the list again', async () => {
+		api.setJunk.mockRejectedValueOnce(new Error('no'))
+		const wrapper = await mount()
+		api.fetchEnvelopes.mockClear()
+		wrapper.vm.toggleSelection(101)
+		wrapper.vm.toggleSelection(102)
+
+		await wrapper.vm.bulkJunk()
+		await flush()
+
+		expect(wrapper.vm.notice).toBe('Could not move 1 message to junk')
+		expect(api.fetchEnvelopes).toHaveBeenCalled()
+	})
+})
+
+describe('mobile EnvelopeList tells the page about refreshing', () => {
+	let api
+
+	async function flush() {
+		for (let i = 0; i < 8; i++) {
+			await Promise.resolve()
+		}
+	}
+
+	async function mount() {
+		const instance = shallowMount(EnvelopeList, {
+			propsData: { mailbox: INBOX },
+			mocks: l10nMocks,
+		})
+		await flush()
+		return instance
+	}
+
+	beforeEach(async () => {
+		vi.clearAllMocks()
+		forgetEverything()
+		storeMock.threaded = false
+		api = await import('../../src/api/mail.js')
+		api.fetchEnvelopes.mockReset()
+		api.fetchEnvelopes.mockResolvedValue([envelope(101)])
+		api.syncMailbox.mockReset()
+		api.syncMailbox.mockResolvedValue(undefined)
+	})
+
+	it('says it is busy while refreshing, and that it checked for new mail', async () => {
+		const wrapper = await mount()
+
+		expect(wrapper.emitted('busy').map(([value]) => value)).toEqual([true, false])
+		expect(wrapper.emitted('refreshed')).toEqual([[true]])
+	})
+
+	it('says so when checking for new mail did not work', async () => {
+		api.syncMailbox.mockRejectedValueOnce(new Error('mail server down'))
+		const wrapper = await mount()
+
+		expect(wrapper.emitted('refreshed')).toEqual([[false]])
+		expect(wrapper.vm.envelopes.map((item) => item.databaseId)).toEqual([101])
+	})
+
+	it('says so when the server did not answer at all', async () => {
+		api.fetchEnvelopes.mockRejectedValueOnce({ code: 'ERR_NETWORK', message: 'Network Error' })
+		const wrapper = await mount()
+
+		expect(wrapper.emitted('refreshed')).toEqual([[false]])
+		expect(api.syncMailbox).not.toHaveBeenCalled()
+	})
+
+	it('answers once for two refreshes in a row: for the newer one', async () => {
+		const wrapper = await mount()
+
+		await Promise.all([wrapper.vm.refresh(), wrapper.vm.refresh()])
+
+		expect(wrapper.emitted('refreshed')).toEqual([[true], [true]])
+	})
+
+	it('stops being busy when it goes away in the middle of a refresh', async () => {
+		api.syncMailbox.mockReturnValue(new Promise(() => {}))
+		const wrapper = await mount()
+		expect(wrapper.emitted('busy').map(([value]) => value)).toEqual([true])
+
+		wrapper.destroy()
+
+		expect(wrapper.emitted('busy').map(([value]) => value)).toEqual([true, false])
 	})
 })

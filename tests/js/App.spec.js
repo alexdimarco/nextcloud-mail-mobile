@@ -4,8 +4,10 @@
  */
 
 import { shallowMount } from '@vue/test-utils'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import App from '../../src/App.vue'
+import EnvelopeList from '../../src/views/EnvelopeList.vue'
+import Reader from '../../src/views/Reader.vue'
 import { l10nMocks } from './l10n.js'
 
 const storeMock = vi.hoisted(() => ({
@@ -19,10 +21,13 @@ const storeMock = vi.hoisted(() => ({
 	version: '',
 }))
 
+// The folder shown; the refresh tests show one
+const mailboxMock = vi.hoisted(() => ({ value: null }))
+
 vi.mock('../../src/store.js', () => ({
 	store: storeMock,
 	loadAccounts: vi.fn(),
-	defaultMailbox: () => null,
+	defaultMailbox: () => mailboxMock.value,
 	findMailbox: () => null,
 }))
 
@@ -369,5 +374,116 @@ describe('mobile App opening a folder from the list of folders', () => {
 
 		expect(recallSearch(7)).toBe('')
 		expect(window.location.hash).toBe('#/box/7')
+	})
+})
+
+describe('mobile App refresh button', () => {
+	const INBOX = { databaseId: 2, accountId: 1, displayName: 'Inbox', accountEmail: 'me@example.com' }
+
+	function refreshButton(wrapper) {
+		return wrapper.find('[aria-label="Refresh"]')
+	}
+
+	function turning(wrapper) {
+		return refreshButton(wrapper).classes().includes('mob__icon-btn--busy')
+	}
+
+	async function flush(wrapper) {
+		for (let i = 0; i < 4; i++) {
+			await wrapper.vm.$nextTick()
+		}
+	}
+
+	beforeEach(() => {
+		vi.useFakeTimers()
+		window.history.replaceState(null, '', '#/')
+		storeMock.accounts = [{ id: 1, emailAddress: 'me@example.com', mailboxes: [INBOX] }]
+		mailboxMock.value = INBOX
+	})
+
+	afterEach(() => {
+		vi.useRealTimers()
+		mailboxMock.value = null
+		storeMock.accounts = []
+	})
+
+	it('turns while the list checks for new mail, then says it is up to date', async () => {
+		const wrapper = mountApp()
+		const list = wrapper.findComponent(EnvelopeList)
+		expect(turning(wrapper)).toBe(false)
+
+		await refreshButton(wrapper).trigger('click')
+
+		expect(list.props('refreshTick')).toBe(1)
+		expect(turning(wrapper)).toBe(true)
+		expect(refreshButton(wrapper).attributes('aria-busy')).toBe('true')
+
+		// A quick check: the button still turns for a moment, then says so
+		list.vm.$emit('refreshed', true)
+		await flush(wrapper)
+		expect(turning(wrapper)).toBe(true)
+		expect(wrapper.find('.mob__toast').exists()).toBe(false)
+
+		vi.advanceTimersByTime(700)
+		await flush(wrapper)
+		expect(turning(wrapper)).toBe(false)
+		expect(wrapper.find('[role="status"]').text()).toBe('Up to date')
+
+		vi.advanceTimersByTime(2500)
+		await flush(wrapper)
+		expect(wrapper.find('.mob__toast').exists()).toBe(false)
+	})
+
+	it('says so when checking for new mail did not work', async () => {
+		const wrapper = mountApp()
+
+		await refreshButton(wrapper).trigger('click')
+		wrapper.findComponent(EnvelopeList).vm.$emit('refreshed', false)
+		vi.advanceTimersByTime(700)
+		await flush(wrapper)
+
+		expect(wrapper.find('.mob__toast').text()).toBe('Could not check for new mail')
+	})
+
+	it('turns as long as the list is busy, also for a check it did not start', async () => {
+		const wrapper = mountApp()
+		const list = wrapper.findComponent(EnvelopeList)
+
+		list.vm.$emit('busy', true)
+		await flush(wrapper)
+		expect(turning(wrapper)).toBe(true)
+
+		list.vm.$emit('busy', false)
+		list.vm.$emit('refreshed', true)
+		vi.advanceTimersByTime(700)
+		await flush(wrapper)
+		expect(turning(wrapper)).toBe(false)
+		// Only a check the button started is reported
+		expect(wrapper.find('.mob__toast').exists()).toBe(false)
+	})
+
+	it('reports nothing later when the list went away before its check finished', async () => {
+		const wrapper = mountApp()
+		const list = wrapper.findComponent(EnvelopeList)
+
+		await refreshButton(wrapper).trigger('click')
+		// The list says it is no longer busy as it goes away
+		list.vm.$emit('busy', false)
+		// A later check started by the page itself
+		list.vm.$emit('refreshed', true)
+		vi.advanceTimersByTime(700)
+		await flush(wrapper)
+
+		expect(wrapper.find('.mob__toast').exists()).toBe(false)
+	})
+
+	it('has the list read its pinned messages again after one was pinned', async () => {
+		window.history.replaceState(null, '', '#/msg/2/9')
+		const wrapper = mountApp()
+
+		wrapper.findComponent(Reader).vm.$emit('pinned', true)
+
+		expect(wrapper.vm.listTick).toBe(1)
+		expect(wrapper.vm.refreshTick).toBe(0)
 	})
 })

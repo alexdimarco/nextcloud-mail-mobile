@@ -31,7 +31,16 @@ vi.mock('../../src/api/mail.js', () => ({
 	setFlags: vi.fn(),
 	deleteMessage: vi.fn(),
 	htmlBodyUrl: (id) => `/html/${id}`,
+	createPinnedTag: vi.fn(),
+	setPinned: vi.fn(),
+	setJunk: vi.fn(),
+	isPinned: (envelope) => !!envelope?.tags?.$pinned,
+	PINNED_LABEL: '$pinned',
+	PINNED_TAG_NAME: 'Pinned',
 }))
+
+// The message's account; the junk tests give it a junk folder
+const accountMock = vi.hoisted(() => ({ trashMailboxId: 3 }))
 
 vi.mock('../../src/store.js', () => ({
 	store: {
@@ -48,7 +57,7 @@ vi.mock('../../src/store.js', () => ({
 		authError: null,
 		offline: false,
 	},
-	accountFor: () => ({ trashMailboxId: 3 }),
+	accountFor: () => accountMock,
 	findMailbox: () => ({ databaseId: 2, accountId: 1 }),
 }))
 
@@ -363,5 +372,186 @@ describe('mobile Reader star', () => {
 
 		expect(api.setFlags).toHaveBeenCalledTimes(1)
 		expect(wrapper.vm.flagged).toBe(true)
+	})
+})
+
+describe('mobile Reader junk', () => {
+	let api
+
+	async function open() {
+		api.fetchMessage.mockResolvedValue({ ...message, flags: { seen: true } })
+		const wrapper = shallowMount(Reader, { propsData: { messageId: 9 }, mocks: l10nMocks })
+		for (let i = 0; i < 4; i++) {
+			await wrapper.vm.$nextTick()
+		}
+		return wrapper
+	}
+
+	function junkButton(wrapper) {
+		return wrapper.findAll('.reader__action').filter((button) => /junk/i.test(button.text())).at(0)
+	}
+
+	beforeEach(async () => {
+		forgetEverything()
+		api = await import('../../src/api/mail.js')
+		api.setJunk.mockReset()
+		api.setJunk.mockResolvedValue(undefined)
+		accountMock.junkMailboxId = 5
+	})
+
+	it('moves the message to junk, and goes back to the list', async () => {
+		const wrapper = await open()
+
+		expect(junkButton(wrapper).text()).toBe('Junk')
+		await junkButton(wrapper).trigger('click')
+		await wrapper.vm.$nextTick()
+
+		expect(api.setJunk).toHaveBeenCalledWith(9, true)
+		expect(wrapper.emitted('deleted')).toHaveLength(1)
+	})
+
+	it('in the junk folder, says "Not junk" and moves it back to the inbox', async () => {
+		accountMock.junkMailboxId = 2
+		const wrapper = await open()
+
+		expect(junkButton(wrapper).text()).toBe('Not junk')
+		await junkButton(wrapper).trigger('click')
+
+		expect(api.setJunk).toHaveBeenCalledWith(9, false)
+	})
+
+	it('is not offered when the account has no junk folder', async () => {
+		delete accountMock.junkMailboxId
+		const wrapper = await open()
+
+		expect(wrapper.findAll('.reader__action').filter((button) => /junk/i.test(button.text()))).toHaveLength(0)
+	})
+
+	it('stays on the message and says so when the move did not work', async () => {
+		api.setJunk.mockRejectedValueOnce(new Error('Request failed with status 500'))
+		const wrapper = await open()
+
+		await junkButton(wrapper).trigger('click')
+		await wrapper.vm.$nextTick()
+		await wrapper.vm.$nextTick()
+
+		expect(wrapper.emitted('deleted')).toBeUndefined()
+		expect(wrapper.find('.reader__notice').text()).toBe('Could not move the message to junk.')
+		expect(junkButton(wrapper).attributes('disabled')).toBeUndefined()
+	})
+})
+
+describe('mobile Reader pin', () => {
+	let api
+	let store
+
+	const PINNED_TAGS = { $pinned: { id: 9, imapLabel: '$pinned', displayName: 'Pinned' } }
+
+	async function open(listed = null) {
+		api.fetchMessage.mockResolvedValue({ ...message, flags: { seen: true } })
+		store.currentEnvelope = listed
+		const wrapper = shallowMount(Reader, { propsData: { messageId: 9 }, mocks: l10nMocks })
+		for (let i = 0; i < 4; i++) {
+			await wrapper.vm.$nextTick()
+		}
+		return wrapper
+	}
+
+	async function settle(wrapper) {
+		for (let i = 0; i < 4; i++) {
+			await wrapper.vm.$nextTick()
+		}
+	}
+
+	function pin(wrapper) {
+		return wrapper.find('.reader__action--icon')
+	}
+
+	beforeEach(async () => {
+		forgetEverything()
+		api = await import('../../src/api/mail.js')
+		;({ store } = await import('../../src/store.js'))
+		store.pinnedTagId = null
+		api.createPinnedTag.mockReset()
+		api.createPinnedTag.mockResolvedValue({ id: 9, imapLabel: '$pinned', displayName: 'Pinned' })
+		api.setPinned.mockReset()
+		api.setPinned.mockResolvedValue(undefined)
+	})
+
+	it('shows a message pinned in the list as pinned', async () => {
+		const wrapper = await open({ databaseId: 9, flags: { seen: true }, tags: PINNED_TAGS })
+
+		expect(pin(wrapper).attributes('aria-pressed')).toBe('true')
+		expect(pin(wrapper).attributes('aria-label')).toBe('Pin')
+		expect(pin(wrapper).classes()).toContain('reader__action--pinned')
+	})
+
+	it('pins: asks Mail for the tag first, then the list follows', async () => {
+		const listed = { databaseId: 9, flags: { seen: true }, tags: [] }
+		const wrapper = await open(listed)
+
+		await pin(wrapper).trigger('click')
+		await settle(wrapper)
+
+		expect(api.setPinned).toHaveBeenCalledWith(9, true)
+		const [askedForTag] = api.createPinnedTag.mock.invocationCallOrder
+		const [pinned] = api.setPinned.mock.invocationCallOrder
+		expect(askedForTag).toBeLessThan(pinned)
+		expect(store.pinnedTagId).toBe(9)
+		expect(listed.tags.$pinned).toBeTruthy()
+		expect(pin(wrapper).attributes('aria-pressed')).toBe('true')
+		expect(wrapper.emitted('pinned')).toEqual([[true]])
+	})
+
+	it('unpins without asking for the tag, and keeps the message\'s other tags', async () => {
+		const listed = { databaseId: 9, flags: { seen: true }, tags: { ...PINNED_TAGS, $label1: { id: 1 } } }
+		const wrapper = await open(listed)
+
+		await pin(wrapper).trigger('click')
+		await settle(wrapper)
+
+		expect(api.createPinnedTag).not.toHaveBeenCalled()
+		expect(api.setPinned).toHaveBeenCalledWith(9, false)
+		expect(Object.keys(listed.tags)).toEqual(['$label1'])
+		expect(pin(wrapper).attributes('aria-pressed')).toBe('false')
+	})
+
+	it('puts the pin back as it was, and says so, when Mail does not take it', async () => {
+		api.setPinned.mockRejectedValueOnce(new Error('Request failed with status 403'))
+		const wrapper = await open()
+
+		await pin(wrapper).trigger('click')
+		await settle(wrapper)
+
+		expect(pin(wrapper).attributes('aria-pressed')).toBe('false')
+		expect(wrapper.find('.reader__notice').text()).toBe('Could not pin the message.')
+		expect(wrapper.emitted('pinned')).toBeUndefined()
+	})
+
+	it('ignores a second tap while the first is on its way', async () => {
+		let finish
+		api.setPinned.mockReturnValueOnce(new Promise((resolve) => {
+			finish = resolve
+		}))
+		const wrapper = await open()
+
+		await pin(wrapper).trigger('click')
+		await settle(wrapper)
+		wrapper.vm.togglePinned()
+		finish()
+		await settle(wrapper)
+
+		expect(api.setPinned).toHaveBeenCalledTimes(1)
+		expect(pin(wrapper).attributes('aria-pressed')).toBe('true')
+	})
+
+	it('never changes the list entry of another message', async () => {
+		const other = { databaseId: 4, flags: { seen: true }, tags: [] }
+		const wrapper = await open(other)
+
+		await pin(wrapper).trigger('click')
+		await settle(wrapper)
+
+		expect(other.tags).toEqual([])
 	})
 })
