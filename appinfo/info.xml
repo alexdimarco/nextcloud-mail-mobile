@@ -15,7 +15,7 @@
 - Optional push notifications when new mail arrives in your inbox.
 
 Mail Mobile does not replace Mail. It needs the Mail app (version 5.13 to 6.x) and uses your Mail accounts as they are set up there. Mail can update on its own schedule.]]></description>
-	<version>0.4.0</version>
+	<version>0.5.0</version>
 	<licence>agpl</licence>
 	<author>Alex DiMarco</author>
 	<namespace>MailMobile</namespace>

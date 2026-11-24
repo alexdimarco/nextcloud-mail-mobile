@@ -6,7 +6,7 @@
 
 All notable changes to Mail Mobile are listed here.
 
-## Unreleased
+## 0.5.0 – 24 November 2026
 
 - Junk: a Junk button on a message, and 🚫 for the messages selected in
   the list, move them to the account's junk folder, the way Mail's own
