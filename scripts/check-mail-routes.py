@@ -379,6 +379,10 @@ def main():
     # (asked for twice; the second time gives the same tag), set on the
     # message, found by the tag, handed to the phone page, then removed
     pinned_tag = {'displayName': 'Pinned', 'color': '#2f6fed'}
+    _, page = session.request('GET', '/index.php/apps/mail_mobile/', headers={'Accept': 'text/html'})
+    handed = initial_state(page, 'pinned-tag')
+    if handed != 0:
+        fail(f'before the first pin, the phone page was handed {handed!r} as the Pinned tag, not 0')
     _, tag = session.json('POST', f'{mail}/api/tags', body=pinned_tag)
     require_keys('the Pinned tag', tag, ['id', 'imapLabel', 'displayName'])
     if tag['imapLabel'] != '$pinned':

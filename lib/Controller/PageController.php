@@ -97,7 +97,8 @@ class PageController extends Controller {
 		$this->initialState->provideInitialState('icon-url', $this->urlGenerator->imagePath(Application::APP_ID, 'icon-192.png'));
 		$this->initialState->provideInitialState('show-details', $this->userId !== null && $this->preferences->showDetails($this->userId));
 		$this->initialState->provideInitialState('source-url', $this->sourceLink->url());
-		$this->initialState->provideInitialState('pinned-tag', $this->userId !== null ? $this->bridge->pinnedTagId($this->userId) : null);
+		// 0 until something is first pinned: Nextcloud refuses an empty value
+		$this->initialState->provideInitialState('pinned-tag', $this->userId !== null ? ($this->bridge->pinnedTagId($this->userId) ?? 0) : 0);
 
 		$response = new StandaloneTemplateResponse(Application::APP_ID, 'main', [
 			'needsMail' => null,

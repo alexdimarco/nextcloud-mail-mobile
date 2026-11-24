@@ -43,8 +43,8 @@ export const store = Vue.observable({
 	showDetails: loadState('mail_mobile', 'show-details', false),
 	sourceUrl: loadState('mail_mobile', 'source-url', ''),
 	// The id of the person's "Pinned" tag in Mail; null until something
-	// is first pinned
-	pinnedTagId: loadState('mail_mobile', 'pinned-tag', null),
+	// is first pinned (the server hands over 0 for that)
+	pinnedTagId: loadState('mail_mobile', 'pinned-tag', 0) || null,
 	buildVersion,
 	// Group the message list by conversation (threaded view). Saved.
 	threaded: readFlag('mail_mobile-threaded'),
