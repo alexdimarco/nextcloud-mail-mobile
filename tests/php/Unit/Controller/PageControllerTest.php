@@ -121,6 +121,16 @@ class PageControllerTest extends TestCase {
 		$this->assertSame('/index.php/apps/mail_mobile/manifest.webmanifest', array_values($links)[0]['attributes']['href']);
 	}
 
+	public function testHandsOverZeroBeforeTheFirstPin(): void {
+		// Nextcloud refuses an empty value and logs a warning for it
+		$this->bridge->method('status')->willReturn(MailStatus::usable('5.13.2'));
+		$this->bridge->method('pinnedTagId')->with('sam')->willReturn(null);
+
+		$this->controller()->index();
+
+		$this->assertSame(0, $this->state['pinned-tag']);
+	}
+
 	public function testFallsBackToTheFixedBundleName(): void {
 		$this->assertSame('mail_mobile-main', $this->controller()->mainScript());
 		file_put_contents($this->jsDir . '/mobile-manifest.json', 'not json');
