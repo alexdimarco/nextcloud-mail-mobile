@@ -14,10 +14,13 @@ use OCA\Mail\Address;
 use OCA\Mail\AddressList;
 use OCA\Mail\Db\Mailbox;
 use OCA\Mail\Db\Message;
+use OCA\Mail\Db\Tag;
+use OCA\Mail\Db\TagMapper;
 use OCA\Mail\Events\NewMessagesSynchronized;
 use OCA\Mail\Service\MailManager;
 use OCA\MailMobile\Mail\MailBridge;
 use OCP\App\IAppManager;
+use OCP\AppFramework\Db\DoesNotExistException;
 use OCP\EventDispatcher\Event;
 use OCP\IL10N;
 use OCP\IUser;
@@ -194,5 +197,28 @@ class MailBridgeTest extends TestCase {
 	public function testDescribeReturnsNullWhenMailFails(): void {
 		$this->container->method('get')->willThrowException(new RuntimeException('Mail changed'));
 		$this->assertNull($this->bridge->describe('sam', 101));
+	}
+
+	public function testFindsThePersonsPinnedTag(): void {
+		$tag = $this->createMock(Tag::class);
+		$tag->method('getId')->willReturn(7);
+		$tags = $this->createMock(TagMapper::class);
+		$tags->expects($this->once())->method('getTagByImapLabel')->with('$pinned', 'sam')->willReturn($tag);
+		$this->container->method('get')->with(TagMapper::class)->willReturn($tags);
+
+		$this->assertSame(7, $this->bridge->pinnedTagId('sam'));
+	}
+
+	public function testNoPinnedTagBeforeTheFirstPin(): void {
+		$tags = $this->createMock(TagMapper::class);
+		$tags->method('getTagByImapLabel')->willThrowException(new DoesNotExistException('no tag'));
+		$this->container->method('get')->willReturn($tags);
+
+		$this->assertNull($this->bridge->pinnedTagId('sam'));
+	}
+
+	public function testPinnedTagIsNullWhenMailFails(): void {
+		$this->container->method('get')->willThrowException(new RuntimeException('Mail changed'));
+		$this->assertNull($this->bridge->pinnedTagId('sam'));
 	}
 }

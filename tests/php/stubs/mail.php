@@ -79,6 +79,27 @@ namespace OCA\Mail\Db {
 			return null;
 		}
 	}
+
+	class Tag {
+		/** @return int */
+		public function getId() {
+			return 0;
+		}
+
+		/** @return string */
+		public function getImapLabel() {
+			return '';
+		}
+	}
+
+	class TagMapper {
+		/**
+		 * @throws \OCP\AppFramework\Db\DoesNotExistException
+		 */
+		public function getTagByImapLabel(string $imapLabel, string $userId): Tag {
+			return new Tag();
+		}
+	}
 }
 
 namespace OCA\Mail\Events {

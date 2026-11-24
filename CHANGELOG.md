@@ -6,6 +6,24 @@
 
 All notable changes to Mail Mobile are listed here.
 
+## Unreleased
+
+- Junk: a Junk button on a message, and 🚫 for the messages selected in
+  the list, move them to the account's junk folder, the way Mail's own
+  "Mark as spam" does (Mail's server makes the move). In the junk folder
+  the same buttons say "Not junk" and move them back to the inbox. Shown
+  only when the account has a junk folder set (Mail finds it by itself
+  when the mail server marks one; otherwise it is set in the full Mail
+  app's account settings).
+- Pin: 📌 on a message keeps it at the top of its folder's list, under
+  "Pinned". Mail has no pin of its own, so a pinned message carries a tag
+  named "Pinned", which the full Mail app shows too; the tag is made in
+  Mail the first time something is pinned. Search results show 📌 on
+  pinned messages instead of a separate heading.
+- The refresh button turns while the list checks for new mail, then says
+  "Up to date", or "Could not check for new mail". It also turns while
+  the page checks by itself, such as when the phone wakes up.
+
 ## 0.4.0 – 22 November 2026
 
 - A message being written is no longer lost:

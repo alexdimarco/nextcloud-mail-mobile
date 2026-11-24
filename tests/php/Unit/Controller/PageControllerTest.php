@@ -94,6 +94,7 @@ class PageControllerTest extends TestCase {
 
 	public function testServesTheCurrentHashedBundle(): void {
 		$this->bridge->method('status')->willReturn(MailStatus::usable('5.13.2'));
+		$this->bridge->method('pinnedTagId')->with('sam')->willReturn(7);
 		file_put_contents($this->jsDir . '/mobile-manifest.json', json_encode(['main' => 'mail_mobile-main.0123456789ab.js']));
 
 		$response = $this->controller()->index();
@@ -109,6 +110,8 @@ class PageControllerTest extends TestCase {
 		$this->assertSame('5.13.2', $this->state['mail-version']);
 		$this->assertSame('/index.php/apps/mail_mobile/sw.js', $this->state['sw-url']);
 		$this->assertSame('/index.php/apps/mail_mobile/', $this->state['sw-scope']);
+		// The person's "Pinned" tag in Mail, for the pinned messages
+		$this->assertSame(7, $this->state['pinned-tag']);
 
 		$csp = $response->getContentSecurityPolicy()->buildPolicy();
 		$this->assertStringContainsString("frame-src 'self'", $csp);

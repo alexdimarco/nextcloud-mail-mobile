@@ -45,24 +45,24 @@ function listKey(mailboxId, threaded, search = '') {
 }
 
 /**
- * Remember (part of) a folder's list: its messages, whether all were
- * loaded, and how far down it was scrolled.
+ * Remember (part of) a folder's list: its messages, its pinned messages,
+ * whether all were loaded, and how far down it was scrolled.
  *
  * @param {number} mailboxId the folder
  * @param {boolean} threaded whether the list groups conversations
- * @param {object} fields any of envelopes, exhausted, scrollTop
+ * @param {object} fields any of envelopes, pinned, exhausted, scrollTop
  * @param {string} search what was searched for; '' for the whole folder
  */
 export function rememberList(mailboxId, threaded, fields, search = '') {
 	const key = listKey(mailboxId, threaded, search)
-	keep(lists, key, { envelopes: [], exhausted: false, scrollTop: 0, ...lists.get(key), ...fields }, MAX_LISTS)
+	keep(lists, key, { envelopes: [], pinned: [], exhausted: false, scrollTop: 0, ...lists.get(key), ...fields }, MAX_LISTS)
 }
 
 /**
  * @param {number} mailboxId the folder
  * @param {boolean} threaded whether the list groups conversations
  * @param {string} search what was searched for; '' for the whole folder
- * @return {object|null} { envelopes, exhausted, scrollTop }, or null
+ * @return {object|null} { envelopes, pinned, exhausted, scrollTop }, or null
  */
 export function recallList(mailboxId, threaded, search = '') {
 	return lists.get(listKey(mailboxId, threaded, search)) ?? null

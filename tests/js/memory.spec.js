@@ -24,7 +24,7 @@ describe('mail remembered during the visit', () => {
 		rememberList(2, false, { envelopes: [{ databaseId: 1 }], exhausted: true })
 		rememberList(2, false, { scrollTop: 300 })
 
-		expect(recallList(2, false)).toEqual({ envelopes: [{ databaseId: 1 }], exhausted: true, scrollTop: 300 })
+		expect(recallList(2, false)).toEqual({ envelopes: [{ databaseId: 1 }], pinned: [], exhausted: true, scrollTop: 300 })
 		// The conversations view of the same folder is a different list
 		expect(recallList(2, true)).toBe(null)
 	})

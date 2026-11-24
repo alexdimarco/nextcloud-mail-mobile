@@ -9,14 +9,15 @@ a throwaway mail server are up, and the mail account exists in Mail. It
 signs in like a browser and uses the addresses in src/api/mail.js in the
 order a person would: accounts, folders, the first sync, the message
 list, a message, its HTML, its conversation, flags, searching a folder,
-starring, address search, an attachment upload, sending through the
-outbox, adding an address to send from and sending from it, moving,
+starring, pinning (Mail's "Pinned" tag, and the phone page reading it),
+junk and not junk, address search, an attachment upload, sending through
+the outbox, adding an address to send from and sending from it, moving,
 deleting. Then it
 turns notifications on and lets one new message arrive, so the caller
 can check that Mail Mobile queued a notification for it.
 
 It changes the server it talks to: it re-points the account's archive,
-sent and trash folders, creates folders, sends and deletes mail and turns
+sent, trash and junk folders, creates folders and a "Pinned" tag, sends and deletes mail and turns
 on a notification address. So it refuses any server that is not on this
 machine (localhost, 127.0.0.1 or ::1), where the integration test runs
 its throwaway Nextcloud.
@@ -31,6 +32,7 @@ Prints the inbox's database id on its last line.
 """
 
 import argparse
+import base64
 import http.cookiejar
 import imaplib
 import json
@@ -214,13 +216,28 @@ def search_filter(text):
     return f'to:{value} from:{value} subject:{value} match:anyof'
 
 
-def search(session, mailbox_id, text, view='singleton'):
+def filtered(session, mailbox_id, search_text, view='singleton'):
+    """The subjects of the messages Mail finds for a search text."""
     query = urllib.parse.urlencode({'mailboxId': mailbox_id, 'limit': 25, 'view': view,
-                                    'filter': search_filter(text)})
+                                    'filter': search_text})
     _, found = session.json('GET', f'/index.php/apps/mail/api/messages?{query}')
     if not isinstance(found, list):
         fail(f'a search did not answer with a list: {found!r}'[:300])
     return [envelope.get('subject') for envelope in found]
+
+
+def search(session, mailbox_id, text, view='singleton'):
+    return filtered(session, mailbox_id, search_filter(text), view)
+
+
+def initial_state(page, key):
+    """A value Mail Mobile's page hands to its script (Nextcloud's
+    initial state: a hidden field holding base64-encoded JSON)."""
+    field = re.search(rb'<input[^>]*id="initial-state-mail_mobile-' + re.escape(key.encode()) + rb'"[^>]*>', page)
+    value = field and re.search(rb'value="([^"]*)"', field.group(0))
+    if not value:
+        fail(f'the phone page does not hand over "{key}"')
+    return json.loads(base64.b64decode(value.group(1)))
 
 
 def find_subject(session, mailbox_id, subject, tries=10):
@@ -257,7 +274,7 @@ def main():
         fail(f'Mail does not list the account {args.mail_user}')
     require_keys('an account', account, [
         'id', 'emailAddress', 'name', 'aliases', 'signature', 'smimeCertificateId',
-        'archiveMailboxId', 'trashMailboxId', 'isDelegated',
+        'archiveMailboxId', 'trashMailboxId', 'junkMailboxId', 'isDelegated',
     ])
     if args.mail_version.startswith('6.'):
         # The phone page shows a "reconnect" banner from this Mail 6 field
@@ -276,7 +293,7 @@ def main():
         fail(f'no folder has specialRole "inbox": {[b.get("name") for b in boxes]}')
     require_keys('a folder', inbox, ['databaseId', 'displayName', 'specialRole', 'unread', 'accountId'])
     folders = {}
-    for name in ('Archive', 'Sent', 'Trash'):
+    for name in ('Archive', 'Sent', 'Trash', 'Junk'):
         # Use the server's own folder when it has one (marked for this use,
         # or named so, also inside another folder such as "INBOX.Sent")
         folder = next((b for b in boxes if b.get('specialRole') == name.lower()), None) \
@@ -288,8 +305,9 @@ def main():
         'archiveMailboxId': folders['Archive'],
         'sentMailboxId': folders['Sent'],
         'trashMailboxId': folders['Trash'],
+        'junkMailboxId': folders['Junk'],
     })
-    ok(f'folders: inbox {inbox["databaseId"]}, archive, sent and trash set')
+    ok(f'folders: inbox {inbox["databaseId"]}, archive, sent, trash and junk set')
     inbox_id = inbox['databaseId']
 
     # A message arrives; the first refresh needs Mail's full first sync
@@ -356,6 +374,57 @@ def main():
     if find_subject(session, inbox_id, subject)['flags'].get('flagged') is not False:
         fail('removing the star does not show in the list')
     ok('the star is set and removed, and shows in the list and the message')
+
+    # Pinning, as the phone page's pin does it: Mail's tag named "Pinned"
+    # (asked for twice; the second time gives the same tag), set on the
+    # message, found by the tag, handed to the phone page, then removed
+    pinned_tag = {'displayName': 'Pinned', 'color': '#2f6fed'}
+    _, tag = session.json('POST', f'{mail}/api/tags', body=pinned_tag)
+    require_keys('the Pinned tag', tag, ['id', 'imapLabel', 'displayName'])
+    if tag['imapLabel'] != '$pinned':
+        fail(f'Mail marks the Pinned tag as {tag["imapLabel"]!r} on the mail server, not $pinned')
+    _, again = session.json('POST', f'{mail}/api/tags', body=pinned_tag)
+    if (again or {}).get('id') != tag['id']:
+        fail(f'asking for the Pinned tag again made another one: {again!r}'[:300])
+    session.request('PUT', f'{mail}/api/messages/{message_id}/tags/%24pinned')
+    found = filtered(session, inbox_id, f'tags:{tag["id"]}')
+    if found != [subject]:
+        fail(f'the pinned messages are {found!r}, not just "{subject}"')
+    found = filtered(session, inbox_id, f'tags:{tag["id"]}', view='threaded')
+    if found != [subject]:
+        fail(f'with conversations grouped, the pinned messages are {found!r}, not just "{subject}"')
+    tags = find_subject(session, inbox_id, subject).get('tags')
+    if not isinstance(tags, dict) or '$pinned' not in tags:
+        fail(f'the list does not show the message as pinned: tags={tags!r}'[:300])
+    _, page = session.request('GET', '/index.php/apps/mail_mobile/', headers={'Accept': 'text/html'})
+    handed = initial_state(page, 'pinned-tag')
+    if handed != tag['id']:
+        fail(f'the phone page was handed {handed!r} as the Pinned tag, not {tag["id"]}')
+    session.request('DELETE', f'{mail}/api/messages/{message_id}/tags/%24pinned')
+    found = filtered(session, inbox_id, f'tags:{tag["id"]}')
+    if found != []:
+        fail(f'after unpinning, the pinned messages are {found!r}')
+    ok(f'pinning works: the Pinned tag ({tag["id"]}) is set, found, handed to the phone page and removed')
+
+    # Junk, with the flags the phone page sends (as Mail's own "Mark as
+    # spam" does): Mail moves the message to the junk folder; "not junk"
+    # moves it back to the inbox
+    other_id = find_subject(session, inbox_id, other_subject)['databaseId']
+    session.request('PUT', f'{mail}/api/messages/{other_id}/flags',
+                    body={'flags': {'$junk': True, '$notjunk': False}})
+    sync(session, folders['Junk'])
+    junked = find_subject(session, folders['Junk'], other_subject)
+    sync(session, inbox_id)
+    if any(envelope.get('subject') == other_subject for envelope in envelopes(session, inbox_id)):
+        fail('the message marked as junk is still in the inbox')
+    session.request('PUT', f'{mail}/api/messages/{junked["databaseId"]}/flags',
+                    body={'flags': {'$junk': False, '$notjunk': True}})
+    sync(session, inbox_id)
+    find_subject(session, inbox_id, other_subject)
+    sync(session, folders['Junk'])
+    if any(envelope.get('subject') == other_subject for envelope in envelopes(session, folders['Junk'])):
+        fail('the message marked as not junk is still in the junk folder')
+    ok('junk moves a message to the junk folder, and not junk moves it back to the inbox')
 
     # Writing: address search, an attachment, sending through the outbox
     _, suggestions = session.json('GET', f'{mail}/api/autoComplete?term=sam')

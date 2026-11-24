@@ -418,6 +418,79 @@ export async function moveMessage(id, destFolderId) {
 }
 
 /**
+ * Junk, or not junk, as Mail's own "Mark as spam" and "Mark not spam" do
+ * it: the flags, in Mail's order. Mail's server then moves the message to
+ * the account's junk folder, or from there back to the inbox. That move
+ * needs the junk folder set in the account (Mail finds it by itself when
+ * the mail server marks one).
+ *
+ * @param {number} id the message
+ * @param {boolean} junk true for junk, false for not junk
+ */
+export async function setJunk(id, junk) {
+	await setFlags(id, { $junk: junk, $notjunk: !junk })
+}
+
+// Mail has no pin. A pinned message carries a tag named "Pinned", so the
+// full Mail app shows it too, under that name. The name is never
+// translated: Mail makes the tag's mark on the mail server ($pinned) from
+// it, and the mark must be the same on every phone and computer.
+export const PINNED_TAG_NAME = 'Pinned'
+export const PINNED_LABEL = '$pinned'
+// The phone page's own blue
+const PINNED_TAG_COLOR = '#2f6fed'
+
+/**
+ * Mail's "Pinned" tag, made when it is first needed. Asking for a tag that
+ * exists returns it unchanged.
+ *
+ * @return {Promise<object>} the tag, with its id and imapLabel
+ */
+export async function createPinnedTag() {
+	try {
+		const resp = await http.post(generateUrl('/apps/mail/api/tags'), {
+			displayName: PINNED_TAG_NAME,
+			color: PINNED_TAG_COLOR,
+		})
+		return resp.data
+	} catch (error) {
+		handleError(error)
+	}
+}
+
+/**
+ * Pin or unpin a message.
+ *
+ * @param {number} id the message
+ * @param {boolean} pinned true to pin
+ */
+export async function setPinned(id, pinned) {
+	const url = generateUrl('/apps/mail/api/messages/{id}/tags/{label}', { id, label: PINNED_LABEL })
+	try {
+		await (pinned ? http.put(url) : http.delete(url))
+	} catch (error) {
+		handleError(error)
+	}
+}
+
+/**
+ * @param {number} tagId the "Pinned" tag's id
+ * @return {string} Mail's search text for the pinned messages
+ */
+export function pinnedFilter(tagId) {
+	return `tags:${Number(tagId)}`
+}
+
+/**
+ * @param {object} envelope a message from the list
+ * @return {boolean} whether it is pinned
+ */
+export function isPinned(envelope) {
+	// Mail sends the tags by their mark, or [] when there are none
+	return !!envelope?.tags?.[PINNED_LABEL]
+}
+
+/**
  * Address suggestions for the composer. Mail's general search covers
  * contacts (by name and by email address), addresses you mailed before,
  * and groups.
