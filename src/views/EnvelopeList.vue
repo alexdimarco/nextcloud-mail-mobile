@@ -5,42 +5,44 @@
 -->
 <template>
 	<div class="list">
-		<!-- Searches as you type, after a short pause; Enter searches at once -->
-		<form
-			v-if="!selectionMode"
-			class="search"
-			role="search"
-			@submit.prevent="applySearch">
-			<input
-				v-model="query"
-				class="search__input"
-				type="search"
-				enterkeyhint="search"
-				autocapitalize="off"
-				autocomplete="off"
-				:placeholder="t('mail_mobile', 'Search this folder')"
-				:aria-label="t('mail_mobile', 'Search this folder')">
-			<button
-				v-if="query"
-				type="button"
-				class="search__clear"
-				:aria-label="t('mail_mobile', 'Clear search')"
-				@click="clearSearch">
-				✕
-			</button>
-		</form>
-		<div v-if="!selectionMode && envelopes.length > 0" class="listbar">
-			<button
-				class="listbar__toggle"
-				:class="{ 'listbar__toggle--on': threaded }"
-				:aria-pressed="threaded ? 'true' : 'false'"
-				@click="toggleThreaded">
-				{{ threaded ? t('mail_mobile', '✓ Conversations') : t('mail_mobile', 'Conversations: off') }}
-			</button>
-			<span class="listbar__spacer" />
-			<button class="listbar__text" @click="enterSelectionMode">
-				{{ t('mail_mobile', 'Select') }}
-			</button>
+		<!-- Stays at the top while the messages scroll -->
+		<div v-if="!selectionMode" class="list__top">
+			<!-- Searches as you type, after a short pause; Enter searches at once -->
+			<form
+				class="search"
+				role="search"
+				@submit.prevent="applySearch">
+				<input
+					v-model="query"
+					class="search__input"
+					type="search"
+					enterkeyhint="search"
+					autocapitalize="off"
+					autocomplete="off"
+					:placeholder="t('mail_mobile', 'Search this folder')"
+					:aria-label="t('mail_mobile', 'Search this folder')">
+				<button
+					v-if="query"
+					type="button"
+					class="search__clear"
+					:aria-label="t('mail_mobile', 'Clear search')"
+					@click="clearSearch">
+					✕
+				</button>
+			</form>
+			<div v-if="envelopes.length > 0" class="listbar">
+				<button
+					class="listbar__toggle"
+					:class="{ 'listbar__toggle--on': threaded }"
+					:aria-pressed="threaded ? 'true' : 'false'"
+					@click="toggleThreaded">
+					{{ threaded ? t('mail_mobile', '✓ Conversations') : t('mail_mobile', 'Conversations: off') }}
+				</button>
+				<span class="listbar__spacer" />
+				<button class="listbar__text" @click="enterSelectionMode">
+					{{ t('mail_mobile', 'Select') }}
+				</button>
+			</div>
 		</div>
 		<div v-if="selectionMode" class="selectbar">
 			<button
@@ -1184,7 +1186,14 @@ export default {
 	color: var(--mob-text);
 	cursor: pointer;
 }
-/* Scrolls away with the list; the bar below it stays at the top */
+/* The search box and the bar below it stay at the top while the
+   messages scroll */
+.list__top {
+	position: sticky;
+	top: 0;
+	z-index: 2;
+	background-color: var(--mob-bg);
+}
 .search {
 	position: relative;
 	display: flex;
@@ -1227,9 +1236,6 @@ export default {
 	cursor: pointer;
 }
 .listbar {
-	position: sticky;
-	top: 0;
-	z-index: 2;
 	display: flex;
 	align-items: center;
 	padding: 6px 12px;

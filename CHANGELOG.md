@@ -6,6 +6,11 @@
 
 All notable changes to Mail Mobile are listed here.
 
+## Unreleased
+
+- The search box stays at the top of the list while the messages
+  scroll, together with the Conversations and Select bar below it.
+
 ## 0.5.0 – 24 November 2026
 
 - Junk: a Junk button on a message, and 🚫 for the messages selected in
