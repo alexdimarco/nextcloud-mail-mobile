@@ -6,7 +6,7 @@
 
 All notable changes to Mail Mobile are listed here.
 
-## Unreleased
+## 0.5.1 – 25 November 2026
 
 - The search box stays at the top of the list while the messages
   scroll, together with the Conversations and Select bar below it.
